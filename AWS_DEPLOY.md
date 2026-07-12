@@ -107,3 +107,58 @@ For heavier production traffic, use `backend/Dockerfile` with ECS Fargate:
 5. Point `api.foragramm.com` to the load balancer.
 
 Elastic Beanstalk is faster to start; ECS Fargate is cleaner for long-term container operations.
+
+## Quick backend deploy command
+
+The repository includes a PowerShell deploy helper:
+
+```powershell
+.\scripts\deploy-backend-eb.ps1
+```
+
+It will:
+
+- package `backend/` as an Elastic Beanstalk source bundle
+- create or update the `fora-cmp-api` Beanstalk application
+- create or update the `fora-cmp-api-prod` environment
+- set backend environment variables
+- update Amplify branch `main` with `VITE_API_URL`
+- start an Amplify release job
+
+Default frontend origin:
+
+```txt
+https://main.d2vde1biowsl7i.amplifyapp.com
+```
+
+Default region:
+
+```txt
+eu-central-1
+```
+
+For the first quick deployment, the script uses SQLite at `/tmp/fora_cmp.db`.
+This is good for proving the live panel actions, but production subscriber data
+should move to RDS PostgreSQL with a real `DATABASE_URL`.
+
+Example with RDS:
+
+```powershell
+.\scripts\deploy-backend-eb.ps1 `
+  -DatabaseUrl "postgresql+psycopg://USER:PASSWORD@RDS_HOST:5432/fora_cmp" `
+  -FrontendOrigin "https://main.d2vde1biowsl7i.amplifyapp.com"
+```
+
+If AWS CLI is not installed, the script creates a local `.tools/awscli` venv and
+installs `awscli` there. AWS credentials still need to be configured once:
+
+```powershell
+aws configure
+```
+
+or, if the account uses IAM Identity Center:
+
+```powershell
+aws configure sso
+aws sso login --profile PROFILE_NAME
+```
