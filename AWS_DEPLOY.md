@@ -12,6 +12,14 @@ Recommended first production path:
 
 Connect the Git repository in AWS Amplify Hosting.
 
+If the GitHub repository root contains this generated workspace structure, set the Amplify app root to:
+
+```txt
+outputs/fora-cmp
+```
+
+If the GitHub repository root is already the app folder itself, leave app root empty or use `/`.
+
 Use these settings:
 
 ```txt
