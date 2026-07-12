@@ -1,5 +1,5 @@
 param(
-  [string]$Region = "eu-central-1",
+  [string]$Region = "us-east-1",
   [string]$AppName = "fora-cmp-api",
   [string]$EnvName = "fora-cmp-api-prod",
   [string]$FrontendOrigin = "https://main.d2vde1biowsl7i.amplifyapp.com",
@@ -25,7 +25,9 @@ function Resolve-AwsCli {
 
   $python = Join-Path $awsCliVenv "Scripts\python.exe"
   $aws = Join-Path $awsCliVenv "Scripts\aws.exe"
-  if (-not (Test-Path $aws)) {
+  $awsCmd = Join-Path $awsCliVenv "Scripts\aws.cmd"
+  $awsWrapper = Join-Path $awsCliVenv "Scripts\aws-local.cmd"
+  if (-not ((Test-Path $aws) -or (Test-Path $awsCmd))) {
     New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
     $runtimePython = "C:\Users\NOKTA\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
     if (-not (Test-Path $runtimePython)) {
@@ -35,7 +37,9 @@ function Resolve-AwsCli {
     & $python -m pip install --upgrade pip
     & $python -m pip install awscli
   }
-  return $aws
+
+  "@echo off`r`n`"$python`" -m awscli %*`r`n" | Set-Content -Path $awsWrapper -Encoding ascii
+  return $awsWrapper
 }
 
 function Invoke-AwsJson([string[]]$Arguments) {
