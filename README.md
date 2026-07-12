@@ -1,69 +1,261 @@
-# FORAGRAMM Conversation Management Platform
+# FORAGRAMM CMP
 
-Modern Telegram conversation automation paneli için React + Flask proje iskeleti.
+FORAGRAMM CMP, Telegram botlarini, aboneleri, kampanyalari, akis kurgularini ve sponsor kanal iceriklerini tek panelden yonetmek icin hazirlanan Conversation Management Platform projesidir.
 
-## Kapsam
+## Su An Neredeyiz?
 
-- Dark, responsive SaaS yönetim paneli
-- Dashboard KPI kartları ve grafikler
-- React Flow tabanlı Conversation Flow Builder
-- User CRM, aktif sohbet, broadcast, bot manager, analytics, event log ve RBAC ekranları
-- Telegram Only Panel: bot bağlantısı, inline buton hedefleri, mesai/gün filtreleri, fallback yanıtları, kampanya kuyruğu ve veri modeli takibi
-- İçerik Havuzu: sponsor kanal postlarını klasörleme, link/çıkartma hariç tutma, günlük gelen içerik sayımı ve benzer başlık temizliği
-- FORAGRAMM logo sistemi: panel, favicon, bot önizleme ve yönetici alanlarında tek logo asset'i
-- Telegram kimliklendirme: `/start`, callback, mesaj ve kampanya aksiyonlarında kullanıcıya `fora_user_id`, bot aboneliğine `subscriber_uid`
-- React Query mock veri katmanı
-- Zustand tabanlı modül navigasyonu
-- Flask backend başlangıç yapısı, SQLAlchemy, Redis, Celery ve WebSocket hazırlığı
+Frontend ve ilk backend motoru hazir. GitHub reposu:
 
-## Frontend
+```txt
+https://github.com/birdizidize-boop/forapp
+```
 
-```bash
+Son push edilen commit:
+
+```txt
+05a084d Fix local AWS CLI wrapper
+```
+
+Amplify frontend yayini icin repo hazir. Backend icin Elastic Beanstalk deploy scripti de hazir, fakat AWS CLI credentials henuz bu bilgisayara girilmedigi icin backend deploy baslatilamadi.
+
+Bloklayan nokta:
+
+```txt
+Unable to locate credentials
+```
+
+Yani AWS Access Key / Secret Key ya da SSO login olmadan AWS hesabinda kaynak olusturamiyoruz.
+
+## Tamamlananlar
+
+- React + Vite + TypeScript panel kuruldu.
+- FORAGRAMM logosu panel genelinde kullanildi.
+- Dashboard, CRM, Live Chat, Broadcast, Bot Manager, Telegram Panel, Icerik Havuzu, Analytics, Logs ve Permissions ekranlari eklendi.
+- Telegram odakli panel eklendi.
+- Bot ekleme formu gercek API'ye baglandi.
+- `/start` test aksiyonu gercek backend endpointine baglandi.
+- CRM artik backend `/api/users` endpointinden kullanici okuyor.
+- Icerik Havuzu icin kanal klasoru olusturma, demo post alma, link/sticker filtreleme ve duplicate temizleme API'leri eklendi.
+- Backend SQLite ile lokal calisacak, PostgreSQL ile production'a tasinacak sekilde duzenlendi.
+- AWS Amplify build sorunu icin `amplify.yml` duzeltildi.
+- AWS Elastic Beanstalk backend deploy scripti eklendi.
+
+## Su An Gercek Calisan Islevler
+
+### Bot Manager
+
+Bot adi, username, kategori ve BotFather token girilince:
+
+```txt
+POST /api/bots
+```
+
+ile backend DB'ye bot kaydi atar. Token duz metin saklanmaz, hashlenir.
+
+### Telegram Panel
+
+Canli test butonu:
+
+```txt
+POST /api/telegram/test-update/<bot_id>
+```
+
+ile `/start` simule eder ve su tablolara kayit atar:
+
+```txt
+users
+subscriptions
+telegram_action_events
+```
+
+### CRM
+
+Kullanicilar:
+
+```txt
+GET /api/users
+```
+
+uzerinden gelir.
+
+### Icerik Havuzu
+
+Kanal klasoru olusturma:
+
+```txt
+POST /api/content-pool/channels
+```
+
+Demo post alma:
+
+```txt
+POST /api/content-pool/simulate
+```
+
+Duplicate temizleme:
+
+```txt
+DELETE /api/content-pool/duplicates/<group_id>
+```
+
+## Lokal Calistirma
+
+### 1. Frontend
+
+```powershell
+cd "C:\Users\NOKTA\Documents\Codex\2026-07-12\files-mentioned-by-the-user-proje\outputs\fora-cmp"
 pnpm install
 pnpm dev
 ```
 
-Varsayılan adres: `http://localhost:5173`
+Varsayilan adres:
 
-## Backend
-
-```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-flask --app run.py run --debug --port 8000
+```txt
+http://localhost:5173
 ```
 
-## AWS Yayın Hazırlığı
+### 2. Backend
 
-AWS deploy dosyaları eklendi:
+Backend icin venv bu makinede kuruldu:
 
-- `amplify.yml`: React paneli AWS Amplify Hosting'e yayınlamak için.
-- `backend/application.py`: Elastic Beanstalk WSGI giriş noktası.
-- `backend/Procfile`: Gunicorn production komutu.
-- `backend/Dockerfile`: ECS Fargate veya container tabanlı deploy için.
-- `.env.production.example` ve `backend/.env.production.example`: üretim ortam değişkenleri.
-- `AWS_DEPLOY.md`: adım adım AWS yayın rehberi.
+```powershell
+cd "C:\Users\NOKTA\Documents\Codex\2026-07-12\files-mentioned-by-the-user-proje\outputs\fora-cmp"
+.\backend\.venv\Scripts\python.exe backend\run.py
+```
 
-Detaylı yayın akışı için `AWS_DEPLOY.md` dosyasını takip edin.
+Varsayilan API:
 
-## Mimari Notlar
+```txt
+http://127.0.0.1:8000/api
+```
 
-- `src/App.tsx` prototip UI yüzeyini ve mock data katmanını içerir.
-- `backend/app` ileride gerçek REST, webhook ve WebSocket servislerine ayrılacak modüler Flask uygulamasıdır.
-- `backend/app/models/core.py` Telegram odaklı `users`, `bots`, `subscriptions`, `posts`, `notifications` ve `analytics` tablolarını da içerir.
-- `users.fora_user_id` tüm botlar arasında tekil kullanıcı kimliğidir; `subscriptions.subscriber_uid` aynı kullanıcının bot bazlı abonelik kimliğidir.
-- `telegram_action_events` `/start`, callback, mesaj ve kampanya aksiyonlarını kullanıcı + bot + abonelik bağıyla saklar.
-- İçerik havuzu için `sponsor_channels`, `content_folders`, `content_pool_items` ve `content_duplicate_groups` modelleri hazırdır.
-- PostgreSQL ana veri kaynağı, Redis ise WebSocket presence, Celery queue ve rate limit için tasarlanmıştır.
-- Multi-tenant yapı için her ana tabloda `tenant_id` alanı planlanmalıdır.
+Frontend lokal default olarak bu API'ye bakar:
 
-## Sonraki Üretim Adımları
+```txt
+VITE_API_URL=http://127.0.0.1:8000/api
+```
 
-1. Auth ve tenant seçimi: JWT, refresh token, role claims.
-2. Flow persistence: `flows`, `nodes`, `edges`, versiyonlama ve publish pipeline.
-3. Telegram adapter: webhook doğrulama, inbound event normalize etme, outbound sender queue.
-4. Live chat: WebSocket rooms, operator assignment ve read receipts.
-5. Analytics: event stream, aggregation jobs, campaign funnel hesapları.
+## AWS Durumu
+
+### Frontend
+
+AWS Amplify frontend icin kullaniliyor.
+
+Mevcut Amplify domain:
+
+```txt
+https://main.d2vde1biowsl7i.amplifyapp.com
+```
+
+Frontend GitHub `main` branch'inden build alacak sekilde hazir.
+
+### Backend
+
+Backend icin Elastic Beanstalk deploy scripti hazir:
+
+```powershell
+.\scripts\deploy-backend-eb.ps1 -Region us-east-1
+```
+
+Script sunlari yapar:
+
+- backend klasorunu zipler
+- S3 bucket olusturur
+- Elastic Beanstalk application/version/environment olusturur veya gunceller
+- backend env degiskenlerini set eder
+- Amplify branch icin `VITE_API_URL` gunceller
+- Amplify release job baslatir
+
+Default backend app adi:
+
+```txt
+fora-cmp-api
+```
+
+Default environment adi:
+
+```txt
+fora-cmp-api-prod
+```
+
+Region su an ARN'e gore:
+
+```txt
+us-east-1
+```
+
+Gelen ARN:
+
+```txt
+arn:aws:resource-groups:us-east-1:443407534262:group/fora-cmp-api/0e75vxlf0godql3x0hfzazm8ub
+```
+
+Bu ARN deploy yetkisi degil, sadece AWS tarafinda bir resource group olustugunu gosterir. Deploy icin AWS CLI credentials gerekiyor.
+
+## AWS Devam Etmek Icin Gereken
+
+Bu bilgisayarda su dosyalar henuz yok:
+
+```txt
+C:\Users\NOKTA\.aws\credentials
+C:\Users\NOKTA\.aws\config
+```
+
+Bu yuzden AWS CLI su hatayi veriyor:
+
+```txt
+Unable to locate credentials
+```
+
+Giris icin:
+
+```powershell
+cd "C:\Users\NOKTA\Documents\Codex\2026-07-12\files-mentioned-by-the-user-proje\outputs\fora-cmp"
+.\.tools\awscli\Scripts\python.exe -m awscli configure
+```
+
+Sorular:
+
+```txt
+AWS Access Key ID:
+AWS Secret Access Key:
+Default region name: us-east-1
+Default output format: json
+```
+
+Giris bittikten sonra:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-backend-eb.ps1 -Region us-east-1
+```
+
+## Production Icin Not
+
+Script ilk hizli deploy icin SQLite kullanabilir:
+
+```txt
+sqlite:////tmp/fora_cmp.db
+```
+
+Bu sadece canli panel butonlarini kanitlamak icin uygundur. Gercek aboneler ve kampanya verisi icin RDS PostgreSQL'e gecilecek.
+
+Production DB ornegi:
+
+```txt
+postgresql+psycopg://USER:PASSWORD@RDS_HOST:5432/fora_cmp
+```
+
+## Siradaki Isler
+
+1. AWS CLI credentials girilecek.
+2. `deploy-backend-eb.ps1` calistirilacak.
+3. Backend URL alinacak.
+4. Amplify `VITE_API_URL` backend URL ile guncellenecek.
+5. Gercek BotFather tokenleri girilecek.
+6. Telegram webhooklari backend URL'ye baglanacak.
+7. Sponsor kanallari icin botlar kanallara admin yapilacak.
+8. RDS PostgreSQL acilip SQLite yerine production DB baglanacak.
+
+## Kisa Ozet
+
+Panel artik sadece goruntu degil. Ilk gercek backend API katmani baglandi. Lokal calisiyor ve GitHub'da duruyor. AWS tarafinda durdugumuz tek nokta credentials eksikligi.
