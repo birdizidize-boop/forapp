@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import {
   Background,
   Controls,
@@ -17,7 +17,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { create } from 'zustand'
 import {
   Activity,
@@ -81,6 +81,22 @@ import {
   YAxis,
 } from 'recharts'
 import clsx from 'clsx'
+import {
+  createBot,
+  createContentChannel,
+  deleteDuplicateGroup,
+  getBots,
+  getContentPoolOverview,
+  getTelegramOverview,
+  getTelegramSchema,
+  getUsers,
+  runTelegramTestUpdate,
+  simulateContentPoolItem,
+  type ApiUser,
+  type BotRecord,
+  type ContentItemRecord,
+  type DuplicateGroupRecord,
+} from './api'
 
 const brandLogo = '/foragramm-logo.png'
 
@@ -130,6 +146,29 @@ type Campaign = {
   completed: number
   status: 'Running' | 'Scheduled' | 'Draft'
 }
+
+const formatDateTime = (value: string | null) => {
+  if (!value) return 'Henüz yok'
+  return new Intl.DateTimeFormat('tr-TR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+const apiUserToRecord = (user: ApiUser): UserRecord => ({
+  name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.username || user.fora_user_id,
+  username: user.username ? `@${user.username.replace(/^@/, '')}` : user.fora_user_id,
+  telegramId: user.telegram_id,
+  tags: [user.language?.toUpperCase() || 'TR', `${user.subscriptions} abonelik`, `${user.events} aksiyon`],
+  city: 'Telegram',
+  lastFlow: `Son görünüm: ${formatDateTime(user.last_seen_at)}`,
+  status: user.events > 0 ? 'active' : 'waiting',
+  value: user.fora_user_id,
+})
+
+const normalizeStatus = (status: string) => status.toLowerCase()
 
 const useAppStore = create<AppState>((set) => ({
   view: 'dashboard',
@@ -716,6 +755,9 @@ function FlowBuilder() {
 }
 
 function Crm() {
+  const { data: apiUsers = [], isError } = useQuery({ queryKey: ['users'], queryFn: getUsers })
+  const crmUsers = apiUsers.length > 0 ? apiUsers.map(apiUserToRecord) : users
+  const selectedUser = crmUsers[0]
   const columns = useMemo<ColumnDef<UserRecord>[]>(
     () => [
       {
@@ -757,13 +799,13 @@ function Crm() {
     ],
     [],
   )
-  const table = useReactTable({ data: users, columns, getCoreRowModel: getCoreRowModel() })
+  const table = useReactTable({ data: crmUsers, columns, getCoreRowModel: getCoreRowModel() })
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
       <Panel
         title="Kullanıcı CRM"
-        eyebrow="Profiles, tags, variables"
+        eyebrow={isError ? 'API kapalı, örnek veri gösteriliyor' : 'Live API profiles'}
         action={
           <button type="button" className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012]">
             <Plus size={16} />
@@ -786,7 +828,7 @@ function Crm() {
         <DataTable table={table} />
       </Panel>
 
-      <Panel title="Elif Kaya profili" eyebrow="Timeline">
+      <Panel title={`${selectedUser.name} profili`} eyebrow="Timeline">
         <div className="space-y-4">
           <div className="rounded-lg border border-emerald-400/15 bg-emerald-400/10 p-4">
             <p className="text-lg font-semibold">Elif Kaya</p>
@@ -922,7 +964,107 @@ function Broadcast() {
   )
 }
 
+function LiveBotManager() {
+  const queryClient = useQueryClient()
+  const [form, setForm] = useState({ name: '', username: '', category: 'Sponsor', token: '' })
+  const { data: bots = [], isError } = useQuery({ queryKey: ['bots'], queryFn: getBots })
+  const createMutation = useMutation({
+    mutationFn: createBot,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bots'] })
+      queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
+      setForm({ name: '', username: '', category: 'Sponsor', token: '' })
+    },
+  })
+
+  if (isError) return <StaticBotManager />
+
+  return (
+    <div className="space-y-5">
+      <Panel
+        title="Bot ekle"
+        eyebrow="Live API"
+        action={
+          <StatusPill
+            tone={createMutation.isPending ? 'amber' : createMutation.isError ? 'rose' : 'green'}
+            label={createMutation.isPending ? 'kaydediliyor' : createMutation.isError ? 'hata' : 'hazır'}
+          />
+        }
+      >
+        <form
+          className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1.4fr_auto]"
+          onSubmit={(event) => {
+            event.preventDefault()
+            createMutation.mutate(form)
+          }}
+        >
+          <input
+            className="h-11 rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+            placeholder="Bot adı"
+            value={form.name}
+            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+          />
+          <input
+            className="h-11 rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+            placeholder="@username"
+            value={form.username}
+            onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))}
+          />
+          <input
+            className="h-11 rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+            placeholder="Kategori"
+            value={form.category}
+            onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}
+          />
+          <input
+            className="h-11 rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+            placeholder="BotFather token"
+            type="password"
+            value={form.token}
+            onChange={(event) => setForm((current) => ({ ...current, token: event.target.value }))}
+          />
+          <button
+            type="submit"
+            className="flex h-11 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-[#042012] disabled:opacity-60"
+            disabled={createMutation.isPending}
+          >
+            <Plus size={16} />
+            Kaydet
+          </button>
+        </form>
+      </Panel>
+
+      <div className="grid gap-5 xl:grid-cols-3">
+        {bots.map((bot: BotRecord) => (
+          <Panel key={bot.id} title={bot.name} eyebrow={bot.username}>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <StatusPill tone={normalizeStatus(bot.status) === 'online' ? 'green' : 'amber'} label={bot.status} />
+                <IconButton label="Ayarlar" icon={Settings} />
+              </div>
+              <Field label="Webhook" value={bot.webhook_path} />
+              <Field label="Kategori" value={bot.category || 'General'} />
+              <Field label="Kayıt" value={formatDateTime(bot.created_at)} />
+              <div className="grid grid-cols-3 gap-2">
+                {['Flow', 'Campaign', 'Operator'].map((item) => (
+                  <button key={item} type="button" className="h-10 rounded-lg border border-white/8 bg-white/[0.035] text-sm text-emerald-50/72">
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Panel>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function BotManager() {
+  return <LiveBotManager />
+}
+
+function StaticBotManager() {
   const bots = [
     ['FORAGRAMM Main Bot', '@foragrammainbot', 'Online', 'Yeni Üye Karşılama', '96.3K mesaj'],
     ['FORAGRAMM Support', '@foragramsupportbot', 'Online', 'Canlı Operatör', '21.8K mesaj'],
@@ -956,6 +1098,34 @@ function BotManager() {
 }
 
 function TelegramPanel() {
+  const queryClient = useQueryClient()
+  const [testMessage, setTestMessage] = useState('')
+  const { data: overview } = useQuery({ queryKey: ['telegram-overview'], queryFn: getTelegramOverview })
+  const { data: apiBots = [] } = useQuery({ queryKey: ['bots'], queryFn: getBots })
+  const { data: apiSchema } = useQuery({ queryKey: ['telegram-schema'], queryFn: getTelegramSchema })
+  const firstBotId = apiBots[0]?.id
+  const apiTelegramBots = apiBots.map((bot) => [
+    bot.name,
+    bot.username,
+    bot.category || 'General',
+    normalizeStatus(bot.status) === 'online' ? 'Online' : 'Paused',
+    '0 akış',
+    '0 kampanya',
+  ])
+  const liveSchema: Array<[string, string[]]> | null = apiSchema ? Object.entries(apiSchema) : null
+  const testMutation = useMutation({
+    mutationFn: () => {
+      if (!firstBotId) throw new Error('Önce bot ekle')
+      return runTelegramTestUpdate(firstBotId)
+    },
+    onSuccess: (result) => {
+      setTestMessage(`${result.user.fora_user_id} kaydedildi, event: ${result.action_type}`)
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
+    },
+    onError: (error) => setTestMessage(error instanceof Error ? error.message : 'Test başarısız'),
+  })
+
   const telegramBots = [
     ['FORAGRAMM Sponsor Bot', '@foragrammsponsorbot', 'Sports / Casino', 'Online', '12 akış', '4 kampanya'],
     ['FORAGRAMM Bonus Bot', '@foragrammbonusbot', 'Bonus', 'Online', '8 akış', '2 kampanya'],
@@ -1018,6 +1188,24 @@ function TelegramPanel() {
               <MiniStat label="Queue" value="214" />
               <MiniStat label="Fail" value="0.06%" />
             </div>
+            <div className="grid grid-cols-3 gap-2">
+              <MiniStat label="DB bot" value={`${overview?.connected_bots ?? apiBots.length}`} />
+              <MiniStat label="DB user" value={`${overview?.users ?? 0}`} />
+              <MiniStat label="Event" value={`${overview?.events ?? 0}`} />
+            </div>
+            <button
+              type="button"
+              className="h-11 w-full rounded-lg border border-lime-300/25 bg-lime-300/10 text-sm font-semibold text-lime-100 disabled:opacity-60"
+              disabled={testMutation.isPending}
+              onClick={() => testMutation.mutate()}
+            >
+              {testMutation.isPending ? 'Canlı /start testi çalışıyor' : 'Canlı /start testi oluştur'}
+            </button>
+            {testMessage && (
+              <div className="rounded-lg border border-lime-300/15 bg-lime-300/10 p-3 text-xs leading-5 text-lime-100">
+                {testMessage}
+              </div>
+            )}
             <div className="rounded-lg border border-lime-300/15 bg-lime-300/10 p-3 text-xs leading-5 text-emerald-50/64">
               Widget loader, chat aside ve analytics scriptleri ayrı health sinyalleri olarak izlenir; gerçek yayına sadece token + webhook testi geçerse izin verilir.
             </div>
@@ -1228,7 +1416,7 @@ function TelegramPanel() {
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Panel title="Telegram botları" eyebrow="Settings and flows">
           <div className="grid gap-3 lg:grid-cols-3">
-            {telegramBots.map(([name, username, category, status, flows, campaigns]) => (
+            {(apiTelegramBots.length > 0 ? apiTelegramBots : telegramBots).map(([name, username, category, status, flows, campaigns]) => (
               <div key={name} className="rounded-lg border border-white/8 bg-white/[0.035] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -1284,7 +1472,7 @@ function TelegramPanel() {
 
         <Panel title="Veri modeli" eyebrow="Telegram tables">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {schema.map(([table, fields]) => (
+            {(liveSchema ?? schema).map(([table, fields]) => (
               <div key={table as string} className="rounded-lg border border-white/8 bg-white/[0.035] p-4">
                 <div className="mb-3 flex items-center gap-2">
                   <Database size={16} className="text-emerald-300" />
@@ -1353,6 +1541,43 @@ function TelegramPreview() {
 }
 
 function ContentPool() {
+  const queryClient = useQueryClient()
+  const { data: contentPool } = useQuery({ queryKey: ['content-pool'], queryFn: getContentPoolOverview })
+  const channelMutation = useMutation({
+    mutationFn: createContentChannel,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['content-pool'] }),
+  })
+  const simulateMutation = useMutation({
+    mutationFn: simulateContentPoolItem,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['content-pool'] }),
+  })
+  const duplicateDeleteMutation = useMutation({
+    mutationFn: deleteDuplicateGroup,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['content-pool'] }),
+  })
+  const liveFolders = contentPool?.folders.map((folder) => [
+    folder.name,
+    folder.channel,
+    folder.total_posts,
+    folder.today_posts,
+    folder.duplicates,
+    formatDateTime(folder.last_received_at),
+  ]) ?? []
+  const liveItems = contentPool?.items.map((item: ContentItemRecord) => [
+    item.folder,
+    item.title,
+    item.excluded_reason || item.media_type,
+    formatDateTime(item.received_at),
+    item.status === 'excluded' ? 'hariç' : item.status === 'duplicate' ? 'benzer' : 'temiz',
+  ]) ?? []
+  const liveDuplicateGroups = contentPool?.duplicate_groups.map((group: DuplicateGroupRecord) => [
+    group.folder,
+    group.title,
+    `${group.item_count} benzer mesaj`,
+    `${group.similarity_score}% benzerlik`,
+    group.id,
+  ]) ?? []
+
   const sponsorFolders = [
     ['Damabet', '@damabetresmi', 42, 8, 3, 'Bugün 14:20'],
     ['Betoffice', '@betofficevip', 28, 4, 1, 'Bugün 13:58'],
@@ -1377,6 +1602,30 @@ function ContentPool() {
 
   return (
     <div className="space-y-5">
+      <section className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
+        <div className="rounded-lg border border-lime-300/15 bg-lime-300/10 p-4">
+          <p className="text-sm font-semibold text-lime-100">Canlı içerik motoru</p>
+          <p className="mt-1 text-sm text-emerald-50/60">
+            Gelen: {contentPool?.today.incoming ?? 0} · Havuza giren: {contentPool?.today.stored ?? 0} · Benzer grup: {contentPool?.today.duplicate_groups ?? 0}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="h-14 rounded-lg border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-semibold text-emerald-100 disabled:opacity-60"
+          disabled={channelMutation.isPending}
+          onClick={() => channelMutation.mutate()}
+        >
+          Kanal klasörü oluştur
+        </button>
+        <button
+          type="button"
+          className="h-14 rounded-lg bg-emerald-400 px-4 text-sm font-semibold text-[#042012] disabled:opacity-60"
+          disabled={simulateMutation.isPending}
+          onClick={() => simulateMutation.mutate()}
+        >
+          Demo post al
+        </button>
+      </section>
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Panel
           title="İçerik Havuzu"
@@ -1389,7 +1638,7 @@ function ContentPool() {
           }
         >
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {sponsorFolders.map(([name, channel, total, today, duplicates, last]) => (
+            {(liveFolders.length > 0 ? liveFolders : sponsorFolders).map(([name, channel, total, today, duplicates, last]) => (
               <div key={name as string} className="rounded-lg border border-emerald-400/12 bg-white/[0.035] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="grid size-11 place-items-center rounded-lg border border-lime-300/20 bg-lime-300/10 text-lime-200">
@@ -1456,12 +1705,12 @@ function ContentPool() {
               <span>Saat</span>
               <span>Durum</span>
             </div>
-            {incomingPosts.map(([folder, title, type, time, status], index) => (
+            {(liveItems.length > 0 ? liveItems : incomingPosts).map(([folder, title, type, time, status], index) => (
               <div
                 key={`${folder}-${title}-${time}`}
                 className={clsx(
                   'grid gap-3 px-4 py-3 text-sm md:grid-cols-[150px_1fr_150px_90px_100px]',
-                  index !== incomingPosts.length - 1 && 'border-b border-white/8',
+                  index !== (liveItems.length > 0 ? liveItems : incomingPosts).length - 1 && 'border-b border-white/8',
                 )}
               >
                 <span className="flex items-center gap-2 font-medium text-emerald-50">
@@ -1499,7 +1748,7 @@ function ContentPool() {
       <section className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
         <Panel title="Benzer başlık grupları" eyebrow="Review before delete">
           <div className="space-y-3">
-            {duplicateGroups.map(([folder, title, count, score]) => (
+            {(liveDuplicateGroups.length > 0 ? liveDuplicateGroups : duplicateGroups).map(([folder, title, count, score, groupId]) => (
               <div key={`${folder}-${title}`} className="rounded-lg border border-white/8 bg-white/[0.035] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -1512,7 +1761,12 @@ function ContentPool() {
                   <button type="button" className="h-10 rounded-lg border border-white/8 bg-white/[0.035] text-sm text-emerald-50/72">
                     İncele
                   </button>
-                  <button type="button" className="h-10 rounded-lg border border-rose-300/20 bg-rose-400/10 text-sm text-rose-100">
+                  <button
+                    type="button"
+                    className="h-10 rounded-lg border border-rose-300/20 bg-rose-400/10 text-sm text-rose-100 disabled:opacity-60"
+                    disabled={!groupId || duplicateDeleteMutation.isPending}
+                    onClick={() => groupId && duplicateDeleteMutation.mutate(groupId)}
+                  >
                     Tekrarları sil
                   </button>
                 </div>

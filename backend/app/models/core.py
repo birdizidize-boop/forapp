@@ -1,8 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -17,7 +16,7 @@ class TenantMixin:
 class Bot(db.Model, TenantMixin):
     __tablename__ = "bots"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     username: Mapped[str] = mapped_column(String(120), nullable=False)
     category: Mapped[str | None] = mapped_column(String(80))
@@ -29,7 +28,7 @@ class Bot(db.Model, TenantMixin):
 class Flow(db.Model, TenantMixin):
     __tablename__ = "flows"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     bot_id: Mapped[str] = mapped_column(ForeignKey("bots.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     status: Mapped[str] = mapped_column(String(40), default="draft")
@@ -39,18 +38,18 @@ class Flow(db.Model, TenantMixin):
 class FlowNode(db.Model, TenantMixin):
     __tablename__ = "nodes"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     flow_id: Mapped[str] = mapped_column(ForeignKey("flows.id"), nullable=False)
     type: Mapped[str] = mapped_column(String(80), nullable=False)
     label: Mapped[str] = mapped_column(String(160), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     flow = relationship("Flow")
 
 
 class FlowEdge(db.Model, TenantMixin):
     __tablename__ = "edges"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     flow_id: Mapped[str] = mapped_column(ForeignKey("flows.id"), nullable=False)
     source_node_id: Mapped[str] = mapped_column(ForeignKey("nodes.id"), nullable=False)
     target_node_id: Mapped[str] = mapped_column(ForeignKey("nodes.id"), nullable=False)
@@ -60,7 +59,7 @@ class FlowEdge(db.Model, TenantMixin):
 class UserProfile(db.Model, TenantMixin):
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     fora_user_id: Mapped[str] = mapped_column(
         String(40),
         index=True,
@@ -76,7 +75,7 @@ class UserProfile(db.Model, TenantMixin):
     first_seen_bot_id: Mapped[str | None] = mapped_column(ForeignKey("bots.id"))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     phone: Mapped[str | None] = mapped_column(String(40))
-    variables: Mapped[dict] = mapped_column(JSONB, default=dict)
+    variables: Mapped[dict] = mapped_column(JSON, default=dict)
     notes: Mapped[str | None] = mapped_column(Text)
     first_seen_bot = relationship("Bot")
 
@@ -84,7 +83,7 @@ class UserProfile(db.Model, TenantMixin):
 class Subscription(db.Model, TenantMixin):
     __tablename__ = "subscriptions"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     subscriber_uid: Mapped[str] = mapped_column(
         String(48),
         index=True,
@@ -104,14 +103,14 @@ class Subscription(db.Model, TenantMixin):
 class TelegramActionEvent(db.Model, TenantMixin):
     __tablename__ = "telegram_action_events"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     bot_id: Mapped[str] = mapped_column(ForeignKey("bots.id"), nullable=False)
     subscription_id: Mapped[str | None] = mapped_column(ForeignKey("subscriptions.id"))
     telegram_update_id: Mapped[str | None] = mapped_column(String(120), index=True)
     action_type: Mapped[str] = mapped_column(String(60), nullable=False)
     command: Mapped[str | None] = mapped_column(String(120))
-    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     user = relationship("UserProfile")
     bot = relationship("Bot")
@@ -121,7 +120,7 @@ class TelegramActionEvent(db.Model, TenantMixin):
 class Post(db.Model, TenantMixin):
     __tablename__ = "posts"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     bot_id: Mapped[str] = mapped_column(ForeignKey("bots.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(180), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -133,7 +132,7 @@ class Post(db.Model, TenantMixin):
 class Notification(db.Model, TenantMixin):
     __tablename__ = "notifications"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     post_id: Mapped[str] = mapped_column(ForeignKey("posts.id"), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -145,7 +144,7 @@ class Notification(db.Model, TenantMixin):
 class Analytics(db.Model, TenantMixin):
     __tablename__ = "analytics"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     bot_id: Mapped[str] = mapped_column(ForeignKey("bots.id"), nullable=False)
     views: Mapped[int] = mapped_column(Integer, default=0)
     clicks: Mapped[int] = mapped_column(Integer, default=0)
@@ -158,7 +157,7 @@ class Analytics(db.Model, TenantMixin):
 class SponsorChannel(db.Model, TenantMixin):
     __tablename__ = "sponsor_channels"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     telegram_channel_id: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     username: Mapped[str | None] = mapped_column(String(120))
@@ -168,7 +167,7 @@ class SponsorChannel(db.Model, TenantMixin):
 class ContentFolder(db.Model, TenantMixin):
     __tablename__ = "content_folders"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     sponsor_channel_id: Mapped[str] = mapped_column(ForeignKey("sponsor_channels.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     sponsor_channel = relationship("SponsorChannel")
@@ -177,7 +176,7 @@ class ContentFolder(db.Model, TenantMixin):
 class ContentPoolItem(db.Model, TenantMixin):
     __tablename__ = "content_pool_items"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     folder_id: Mapped[str] = mapped_column(ForeignKey("content_folders.id"), nullable=False)
     source_message_id: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(220), nullable=False)
@@ -195,7 +194,7 @@ class ContentPoolItem(db.Model, TenantMixin):
 class ContentDuplicateGroup(db.Model, TenantMixin):
     __tablename__ = "content_duplicate_groups"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     folder_id: Mapped[str] = mapped_column(ForeignKey("content_folders.id"), nullable=False)
     group_key: Mapped[str] = mapped_column(String(160), index=True, nullable=False)
     canonical_title: Mapped[str] = mapped_column(String(220), nullable=False)
