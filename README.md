@@ -207,6 +207,44 @@ Bu yuzden AWS CLI su hatayi veriyor:
 Unable to locate credentials
 ```
 
+Son denemede credential dosyalari olustu ancak AWS anahtari gecersiz dondu:
+
+```txt
+InvalidClientTokenId
+```
+
+Bu nedenle alternatif kurulum yolu olarak Render Blueprint eklendi.
+
+## Render Alternatifi
+
+Render icin repo kokune su dosya eklendi:
+
+```txt
+render.yaml
+```
+
+Bu Blueprint sunlari olusturur:
+
+```txt
+fora-cmp-api    Flask backend
+fora-cmp-panel  React static frontend
+fora-cmp-db     PostgreSQL database
+```
+
+Kurulum adimlari:
+
+```txt
+RENDER_DEPLOY.md
+```
+
+Kisa yol:
+
+1. Render Dashboard > Blueprints
+2. New Blueprint Instance
+3. GitHub repo: `birdizidize-boop/forapp`
+4. Branch: `main`
+5. `render.yaml` ile deploy
+
 Giris icin:
 
 ```powershell
