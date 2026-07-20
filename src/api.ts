@@ -1,4 +1,27 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000/api'
+const API_URL_STORAGE_KEY = 'fora_api_base_url'
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000/api'
+
+const normalizeApiBaseUrl = (value: string) => {
+  const trimmed = value.trim().replace(/\/+$/, '')
+  if (!trimmed) return normalizeApiBaseUrl(DEFAULT_API_BASE_URL)
+  return trimmed.endsWith('/api') ? trimmed : `${trimmed}/api`
+}
+
+const readStoredApiUrl = () => {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage.getItem(API_URL_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+export const getApiBaseUrl = () => normalizeApiBaseUrl(readStoredApiUrl() ?? DEFAULT_API_BASE_URL)
+
+export const setApiBaseUrl = (value: string) => {
+  const normalized = normalizeApiBaseUrl(value)
+  window.localStorage.setItem(API_URL_STORAGE_KEY, normalized)
+  return normalized
+}
 
 export type BotRecord = {
   id: string
@@ -98,7 +121,7 @@ export type ContentPoolOverview = {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
   })

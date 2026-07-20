@@ -85,12 +85,14 @@ import {
   createBot,
   createContentChannel,
   deleteDuplicateGroup,
+  getApiBaseUrl,
   getBots,
   getContentPoolOverview,
   getTelegramOverview,
   getTelegramSchema,
   getUsers,
   runTelegramTestUpdate,
+  setApiBaseUrl,
   simulateContentPoolItem,
   type ApiUser,
   type BotRecord,
@@ -518,7 +520,14 @@ function Sidebar() {
 function Topbar() {
   const view = useAppStore((state) => state.view)
   const setView = useAppStore((state) => state.setView)
+  const queryClient = useQueryClient()
+  const [apiUrl, setApiUrlInput] = useState(getApiBaseUrl())
   const title = navItems.find((item) => item.view === view)?.label ?? 'Dashboard'
+  const saveApiUrl = () => {
+    const normalized = setApiBaseUrl(apiUrl)
+    setApiUrlInput(normalized)
+    queryClient.invalidateQueries()
+  }
 
   return (
     <header className="sticky top-0 z-20 border-b border-emerald-400/10 bg-[#050706]/88 px-4 py-3 backdrop-blur-xl sm:px-6 lg:px-8">
@@ -547,6 +556,29 @@ function Topbar() {
               placeholder="Kullanıcı, flow, kampanya ara"
             />
           </label>
+          <form
+            className="hidden h-10 w-80 items-center gap-2 rounded-lg border border-emerald-400/15 bg-white/[0.04] px-3 text-sm text-emerald-50/65 xl:flex"
+            onSubmit={(event) => {
+              event.preventDefault()
+              saveApiUrl()
+            }}
+          >
+            <Database size={16} />
+            <input
+              className="min-w-0 flex-1 bg-transparent text-emerald-50 placeholder:text-emerald-50/42 focus:outline-none"
+              value={apiUrl}
+              onChange={(event) => setApiUrlInput(event.target.value)}
+              placeholder="https://backend-url/api"
+              aria-label="API URL"
+            />
+            <button
+              type="submit"
+              className="grid size-7 place-items-center rounded-md text-emerald-200 transition hover:bg-emerald-400/10"
+              aria-label="API URL kaydet"
+            >
+              <CheckCircle2 size={16} />
+            </button>
+          </form>
           <IconButton label="Bildirimler" icon={Bell} />
           <button
             type="button"
