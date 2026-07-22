@@ -36,6 +36,77 @@ const similarityScore = (left, right) => {
   return Math.round((shared / total) * 100);
 };
 
+const maskToken = (token) => (token ? `${String(token).slice(0, 4)}...${String(token).slice(-4)}` : null);
+
+const publicBot = (bot) => {
+  const { _token, ...safeBot } = bot;
+  return safeBot;
+};
+
+const telegramApi = async (token, method, payload = {}) => {
+  if (!token) return { ok: false, description: "Telegram token missing" };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => ({}));
+    return { ok: response.ok && body.ok !== false, http_status: response.status, ...body };
+  } catch (error) {
+    return {
+      ok: false,
+      description: error instanceof Error ? error.message : "Telegram request failed",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const syncBotWithTelegram = async (bot) => {
+  if (!bot?._token) {
+    bot.last_error = "Bot token missing";
+    return { ok: false, status: "missing_token", description: bot.last_error, bot: publicBot(bot) };
+  }
+  const result = await telegramApi(bot._token, "getMe");
+  bot.last_checked_at = nowIso();
+  if (result.ok) {
+    const telegramBot = result.result || {};
+    bot.telegram_verified = true;
+    bot.telegram_bot_id = telegramBot.id ? String(telegramBot.id) : bot.telegram_bot_id || null;
+    bot.username = telegramBot.username ? `@${telegramBot.username}` : bot.username;
+    bot.name = telegramBot.first_name || bot.name;
+    bot.status = "online";
+    bot.last_error = null;
+  } else {
+    bot.telegram_verified = false;
+    bot.status = bot.status === "online" ? "token_saved" : bot.status;
+    bot.last_error = result.description || "Telegram getMe failed";
+  }
+  return {
+    status: result.ok ? "verified" : "check_failed",
+    ok: Boolean(result.ok),
+    description: result.description,
+    telegram: result.result,
+    bot: publicBot(bot),
+  };
+};
+
+const inlineKeyboard = (buttons = []) => {
+  const rows = buttons
+    .filter((button) => button && button.label)
+    .map((button) => {
+      const label = String(button.label);
+      const value = String(button.value || button.url || button.target || "");
+      if (button.type === "url" || /^https?:\/\//i.test(value)) return [{ text: label, url: value }];
+      return [{ text: label, callback_data: value || label }];
+    });
+  return rows.length > 0 ? { inline_keyboard: rows } : undefined;
+};
+
 const seedState = () => {
   const createdAt = nowIso();
   return {
@@ -49,6 +120,12 @@ const seedState = () => {
         is_active: true,
         created_at: createdAt,
         webhook_path: "/api/telegram/webhook/bot_sponsor",
+        token_present: false,
+        token_hint: null,
+        telegram_verified: false,
+        telegram_bot_id: null,
+        last_checked_at: null,
+        last_error: null,
       },
       {
         id: "bot_bonus",
@@ -59,6 +136,12 @@ const seedState = () => {
         is_active: true,
         created_at: createdAt,
         webhook_path: "/api/telegram/webhook/bot_bonus",
+        token_present: false,
+        token_hint: null,
+        telegram_verified: false,
+        telegram_bot_id: null,
+        last_checked_at: null,
+        last_error: null,
       },
       {
         id: "bot_vip",
@@ -69,6 +152,12 @@ const seedState = () => {
         is_active: false,
         created_at: createdAt,
         webhook_path: "/api/telegram/webhook/bot_vip",
+        token_present: false,
+        token_hint: null,
+        telegram_verified: false,
+        telegram_bot_id: null,
+        last_checked_at: null,
+        last_error: null,
       },
     ],
     users: [],
@@ -191,6 +280,79 @@ const contentOverview = (data) => {
   };
 };
 
+const extractTelegramActor = (update) => {
+  const callback = update.callback_query || {};
+  const message = update.message || callback.message || {};
+  const actor = message.from || callback.from || {};
+  const text = message.text || callback.data || "";
+  const actionType = callback.id ? "callback_query" : text.startsWith("/start") ? "start_command" : "message";
+  return { actor, text, actionType };
+};
+
+const upsertTelegramIdentity = (data, bot, update) => {
+  const { actor, text, actionType } = extractTelegramActor(update);
+  const telegramId = String(actor.id || update.telegram_id || `local-${Math.random().toString(16).slice(2, 10)}`);
+  let user = data.users.find((entry) => entry.telegram_id === telegramId);
+  if (!user) {
+    const sequence = String(data.users.length + 1).padStart(6, "0");
+    user = {
+      id: id("user"),
+      fora_user_id: `FGM-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${sequence}`,
+      telegram_id: telegramId,
+      username: actor.username || null,
+      first_name: actor.first_name || null,
+      last_name: actor.last_name || null,
+      language: actor.language_code || update.language || "tr",
+      joined_at: nowIso(),
+      last_seen_at: nowIso(),
+      first_seen_bot_id: bot.id,
+      subscriptions: 0,
+      events: 0,
+    };
+    data.users.unshift(user);
+  } else {
+    user.username = actor.username || user.username;
+    user.first_name = actor.first_name || user.first_name;
+    user.last_name = actor.last_name || user.last_name;
+    user.language = actor.language_code || user.language;
+    user.last_seen_at = nowIso();
+  }
+
+  let subscription = data.subscriptions.find((entry) => entry.user_id === user.id && entry.bot_id === bot.id);
+  if (!subscription) {
+    subscription = {
+      id: id("subscription"),
+      subscriber_uid: `SUB-${Math.random().toString(16).slice(2, 14).toUpperCase()}`,
+      user_id: user.id,
+      bot_id: bot.id,
+      started_at: nowIso(),
+      status: "active",
+      last_action_at: nowIso(),
+    };
+    data.subscriptions.unshift(subscription);
+    user.subscriptions += 1;
+  } else {
+    subscription.last_action_at = nowIso();
+    subscription.status = "active";
+  }
+
+  const event = {
+    id: id("event"),
+    user_id: user.id,
+    bot_id: bot.id,
+    subscription_id: subscription.id,
+    telegram_update_id: update.update_id != null ? String(update.update_id) : null,
+    action_type: actionType,
+    command: text && text.startsWith("/") ? text.split(" ", 1)[0] : null,
+    payload: update,
+    created_at: nowIso(),
+  };
+  user.events += 1;
+  user.last_seen_at = nowIso();
+  data.events.unshift(event);
+  return { user, subscription, event, text };
+};
+
 const ingestContent = (data, folder, payload) => {
   const receivedAt = nowIso();
   const title = payload.title || payload.content?.slice(0, 80) || "Untitled";
@@ -271,7 +433,7 @@ export async function handleApiRequest(request) {
   if (method === "GET" && path === "/health") return json({ status: "ok", service: "fora-cmp-sites-api", database: "worker-state" });
   if (method === "GET" && path === "/telegram/overview") return json(overview(data));
   if (method === "GET" && path === "/telegram/schema") return json(schema);
-  if (method === "GET" && path === "/bots") return json(data.bots);
+  if (method === "GET" && path === "/bots") return json(data.bots.map(publicBot));
   if (method === "GET" && path === "/users") return json(data.users);
   if (method === "GET" && path === "/flows") return json(data.flows);
   if (method === "GET" && path === "/campaigns") return json(data.campaigns);
@@ -280,18 +442,28 @@ export async function handleApiRequest(request) {
   if (method === "POST" && path === "/bots") {
     const payload = await body(request);
     const username = String(payload.username || "foragramm_bot").startsWith("@") ? payload.username : `@${payload.username || "foragramm_bot"}`;
+    const token = String(payload.token || "").trim();
+    const botId = id("bot");
     const bot = {
-      id: id("bot"),
+      id: botId,
       name: payload.name || "FORAGRAMM Bot",
       username,
       category: payload.category || "Sponsor",
-      status: "online",
+      status: token ? "token_saved" : "online",
       is_active: true,
       created_at: nowIso(),
-      webhook_path: `/api/telegram/webhook/${id("webhook")}`,
+      webhook_path: `/api/telegram/webhook/${botId}`,
+      token_present: Boolean(token),
+      token_hint: maskToken(token),
+      telegram_verified: false,
+      telegram_bot_id: null,
+      last_checked_at: null,
+      last_error: token ? null : "Bot token missing",
+      _token: token || null,
     };
+    if (token) await syncBotWithTelegram(bot);
     data.bots.unshift(bot);
-    return json(bot, { status: 201 });
+    return json(publicBot(bot), { status: 201 });
   }
 
   if (method === "POST" && path === "/flows") {
@@ -355,6 +527,11 @@ export async function handleApiRequest(request) {
   if (method === "POST" && sendCampaignMatch) {
     const campaign = data.campaigns.find((entry) => entry.id === sendCampaignMatch[1]);
     if (!campaign) return json({ error: "campaign not found" }, { status: 404 });
+    const bot = data.bots.find((entry) => entry.id === campaign.bot_id) || data.bots[0];
+    if (campaign.mode === "real" && !bot?._token) {
+      campaign.status = "blocked";
+      return json({ error: "Telegram token missing for real broadcast", campaign }, { status: 400 });
+    }
     const postId = id("post");
     const notifications = data.users.map((user) => ({
       id: id("notification"),
@@ -364,12 +541,113 @@ export async function handleApiRequest(request) {
       sent_at: null,
     }));
     data.notifications.unshift(...notifications);
+    let liveSent = 0;
+    let liveFailed = 0;
+    if (campaign.mode === "real" && bot?._token) {
+      const replyMarkup = inlineKeyboard(campaign.buttons);
+      for (const notification of notifications) {
+        const user = data.users.find((entry) => entry.id === notification.user_id);
+        const result = await telegramApi(bot._token, "sendMessage", {
+          chat_id: user?.telegram_id,
+          text: campaign.message || campaign.title,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        });
+        if (result.ok) {
+          notification.status = "sent";
+          notification.sent_at = nowIso();
+          liveSent += 1;
+        } else {
+          notification.status = "failed";
+          liveFailed += 1;
+        }
+      }
+    }
     campaign.status = data.users.length > 0 ? "sent" : "ready";
     campaign.sent_count = data.users.length;
     campaign.clicked_count = Math.floor(data.users.length * 0.28);
     campaign.completed_count = Math.floor(data.users.length * 0.11);
     campaign.last_sent_at = nowIso();
-    return json({ status: campaign.status, queued_notifications: notifications.length, campaign });
+    return json({
+      status: campaign.status,
+      queued_notifications: notifications.length,
+      live_delivery_attempted: campaign.mode === "real",
+      live_sent: liveSent,
+      live_failed: liveFailed,
+      delivery_status: campaign.mode === "real" ? "telegram_sendMessage" : "queued_only",
+      campaign,
+    });
+  }
+
+  const checkBotMatch = path.match(/^\/telegram\/bots\/([^/]+)\/check$/);
+  if (method === "POST" && checkBotMatch) {
+    const bot = data.bots.find((entry) => entry.id === checkBotMatch[1]);
+    if (!bot) return json({ error: "bot not found" }, { status: 404 });
+    const result = await syncBotWithTelegram(bot);
+    return json(result, { status: result.ok ? 200 : 400 });
+  }
+
+  const webhookMatch = path.match(/^\/telegram\/bots\/([^/]+)\/set-webhook$/);
+  if (method === "POST" && webhookMatch) {
+    const bot = data.bots.find((entry) => entry.id === webhookMatch[1]);
+    if (!bot) return json({ error: "bot not found" }, { status: 404 });
+    if (!bot._token) return json({ error: "Telegram token missing" }, { status: 400 });
+    const payload = await body(request);
+    const webhookUrl = String(payload.webhook_url || "").trim();
+    if (!/^https:\/\//i.test(webhookUrl)) return json({ error: "webhook_url must be https" }, { status: 400 });
+    const result = await telegramApi(bot._token, "setWebhook", { url: webhookUrl });
+    bot.last_checked_at = nowIso();
+    bot.last_error = result.ok ? null : result.description || "setWebhook failed";
+    return json({
+      status: result.ok ? "webhook_set" : "webhook_failed",
+      ok: Boolean(result.ok),
+      webhook_url: webhookUrl,
+      description: result.description,
+      bot: publicBot(bot),
+    }, { status: result.ok ? 200 : 400 });
+  }
+
+  const sendTestMatch = path.match(/^\/telegram\/bots\/([^/]+)\/send-test$/);
+  if (method === "POST" && sendTestMatch) {
+    const bot = data.bots.find((entry) => entry.id === sendTestMatch[1]);
+    if (!bot) return json({ error: "bot not found" }, { status: 404 });
+    if (!bot._token) return json({ error: "Telegram token missing" }, { status: 400 });
+    const payload = await body(request);
+    const chatId = String(payload.chat_id || "").trim();
+    if (!chatId) return json({ error: "chat_id is required" }, { status: 400 });
+    const result = await telegramApi(bot._token, "sendMessage", {
+      chat_id: chatId,
+      text: payload.message || "FORAGRAMM test mesaji",
+    });
+    return json({
+      status: result.ok ? "sent" : "failed",
+      ok: Boolean(result.ok),
+      chat_id: chatId,
+      message_id: result.result?.message_id,
+      description: result.description,
+    }, { status: result.ok ? 200 : 400 });
+  }
+
+  const webhookUpdateMatch = path.match(/^\/telegram\/webhook\/([^/]+)$/);
+  if (method === "POST" && webhookUpdateMatch) {
+    const bot = data.bots.find((entry) => entry.id === webhookUpdateMatch[1]);
+    if (!bot) return json({ error: "bot not found" }, { status: 404 });
+    const update = await body(request);
+    const { user, subscription, event, text } = upsertTelegramIdentity(data, bot, update);
+    if (bot._token && text?.startsWith("/start")) {
+      await telegramApi(bot._token, "sendMessage", {
+        chat_id: user.telegram_id,
+        text: "FORAGRAMM ailesine hos geldin. Sana ozel kampanyalari buradan takip edebilirsin.",
+      });
+    }
+    return json({
+      status: "accepted",
+      bot: publicBot(bot),
+      user,
+      subscription_id: subscription.id,
+      subscriber_uid: subscription.subscriber_uid,
+      event_id: event.id,
+      action_type: event.action_type,
+    }, { status: 202 });
   }
 
   const testUpdateMatch = path.match(/^\/telegram\/test-update\/([^/]+)$/);
@@ -377,42 +655,21 @@ export async function handleApiRequest(request) {
     const bot = data.bots.find((entry) => entry.id === testUpdateMatch[1]);
     if (!bot) return json({ error: "bot not found" }, { status: 404 });
     const payload = await body(request);
-    const telegramId = String(payload.telegram_id || Math.floor(900000000 + Math.random() * 999999));
-    let user = data.users.find((entry) => entry.telegram_id === telegramId);
-    if (!user) {
-      const sequence = String(data.users.length + 1).padStart(6, "0");
-      user = {
-        id: id("user"),
-        fora_user_id: `FGM-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${sequence}`,
-        telegram_id: telegramId,
-        username: payload.username || `fora_test_${Math.floor(Math.random() * 9999)}`,
-        first_name: payload.first_name || "FORA Test",
-        last_name: null,
-        language: payload.language || "tr",
-        joined_at: nowIso(),
-        last_seen_at: nowIso(),
-        subscriptions: 0,
-        events: 0,
-      };
-      data.users.unshift(user);
-    }
-    let subscription = data.subscriptions.find((entry) => entry.user_id === user.id && entry.bot_id === bot.id);
-    if (!subscription) {
-      subscription = {
-        id: id("subscription"),
-        subscriber_uid: `SUB-${Math.random().toString(16).slice(2, 14).toUpperCase()}`,
-        user_id: user.id,
-        bot_id: bot.id,
-        started_at: nowIso(),
-        status: "active",
-      };
-      data.subscriptions.unshift(subscription);
-      user.subscriptions += 1;
-    }
-    const event = { id: id("event"), user_id: user.id, bot_id: bot.id, action_type: "start_command", command: "/start", created_at: nowIso() };
-    user.events += 1;
-    user.last_seen_at = nowIso();
-    data.events.unshift(event);
+    const update = {
+      update_id: Math.floor(Date.now() / 1000),
+      message: {
+        message_id: Math.floor(Date.now() / 1000),
+        text: "/start codex-test",
+        date: Math.floor(Date.now() / 1000),
+        from: {
+          id: payload.telegram_id || Math.floor(900000000 + Math.random() * 999999),
+          username: payload.username || `fora_test_${Math.floor(Math.random() * 9999)}`,
+          first_name: payload.first_name || "FORA Test",
+          language_code: payload.language || "tr",
+        },
+      },
+    };
+    const { user, subscription, event } = upsertTelegramIdentity(data, bot, update);
     return json({ status: "accepted", action_type: event.action_type, subscriber_uid: subscription.subscriber_uid, event_id: event.id, user }, { status: 202 });
   }
 

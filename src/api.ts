@@ -43,6 +43,12 @@ export type BotRecord = {
   is_active: boolean
   created_at: string | null
   webhook_path: string
+  token_present?: boolean
+  token_hint?: string | null
+  telegram_verified?: boolean
+  telegram_bot_id?: string | null
+  last_checked_at?: string | null
+  last_error?: string | null
 }
 
 export type CreateBotPayload = {
@@ -144,7 +150,39 @@ export type CreateCampaignPayload = {
 export type CampaignSendResult = {
   status: string
   queued_notifications: number
+  live_delivery_attempted?: boolean
+  live_sent?: number
+  live_failed?: number
+  delivery_status?: string
   campaign: CampaignRecord
+}
+
+export type TelegramConnectionResult = {
+  status: string
+  ok: boolean
+  description?: string
+  bot?: BotRecord
+  telegram?: {
+    id?: number | string
+    username?: string
+    first_name?: string
+  }
+}
+
+export type TelegramWebhookResult = {
+  status: string
+  ok: boolean
+  webhook_url: string
+  description?: string
+  bot?: BotRecord
+}
+
+export type TelegramSendTestResult = {
+  status: string
+  ok: boolean
+  chat_id: string
+  message_id?: number | string
+  description?: string
 }
 
 export type ContentFolderRecord = {
@@ -251,6 +289,21 @@ export const runTelegramTestUpdate = (botId: string) =>
       first_name: 'FORA Test',
       language: 'tr',
     }),
+  })
+
+export const checkTelegramBot = (botId: string) =>
+  apiFetch<TelegramConnectionResult>(`/telegram/bots/${botId}/check`, { method: 'POST' })
+
+export const setTelegramWebhook = (botId: string, webhookUrl: string) =>
+  apiFetch<TelegramWebhookResult>(`/telegram/bots/${botId}/set-webhook`, {
+    method: 'POST',
+    body: JSON.stringify({ webhook_url: webhookUrl }),
+  })
+
+export const sendTelegramTestMessage = (botId: string, chatId: string, message: string) =>
+  apiFetch<TelegramSendTestResult>(`/telegram/bots/${botId}/send-test`, {
+    method: 'POST',
+    body: JSON.stringify({ chat_id: chatId, message }),
   })
 
 export const getContentPoolOverview = () => apiFetch<ContentPoolOverview>('/content-pool/overview')

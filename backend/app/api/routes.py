@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from uuid import uuid4
@@ -29,6 +33,7 @@ from app.models.core import (
 )
 
 api = Blueprint("api", __name__)
+RUNTIME_BOT_TOKENS: dict[str, str] = {}
 
 
 def tenant_id() -> str:
@@ -51,7 +56,98 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def mask_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    return f"{token[:4]}...{token[-4:]}"
+
+
+def bot_token_env_names(bot: Bot) -> list[str]:
+    safe_id = re.sub(r"[^A-Z0-9]+", "_", bot.id.upper()).strip("_")
+    safe_username = re.sub(r"[^A-Z0-9]+", "_", bot.username.upper()).strip("_")
+    return [
+        f"TELEGRAM_BOT_TOKEN_{safe_id}",
+        f"TELEGRAM_BOT_TOKEN_{safe_username}",
+    ]
+
+
+def resolve_bot_token(bot: Bot) -> str | None:
+    token = RUNTIME_BOT_TOKENS.get(bot.id)
+    if token:
+        return token
+    for env_name in bot_token_env_names(bot):
+        token = os.getenv(env_name)
+        if token:
+            RUNTIME_BOT_TOKENS[bot.id] = token
+            return token
+    return None
+
+
+def telegram_api(token: str | None, method: str, payload: dict | None = None) -> dict:
+    if not token:
+        return {"ok": False, "description": "Telegram token missing"}
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=json.dumps(payload or {}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            body = response.read().decode("utf-8")
+            parsed = json.loads(body) if body else {}
+            parsed.setdefault("ok", response.status < 400)
+            parsed["http_status"] = response.status
+            return parsed
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            parsed = {"description": body or str(error)}
+        parsed["ok"] = False
+        parsed["http_status"] = error.code
+        return parsed
+    except Exception as error:
+        return {"ok": False, "description": str(error)}
+
+
+def sync_bot_with_telegram(bot: Bot) -> dict:
+    result = telegram_api(resolve_bot_token(bot), "getMe")
+    if result.get("ok"):
+        telegram_bot = result.get("result") or {}
+        if telegram_bot.get("username"):
+            bot.username = f"@{telegram_bot['username']}"
+        if telegram_bot.get("first_name"):
+            bot.name = telegram_bot["first_name"]
+        bot.status = "online"
+        bot.is_active = True
+        db.session.commit()
+    return {
+        "status": "verified" if result.get("ok") else "check_failed",
+        "ok": bool(result.get("ok")),
+        "description": result.get("description"),
+        "telegram": result.get("result"),
+        "bot": bot_to_dict(bot),
+    }
+
+
+def inline_keyboard(buttons: list | None) -> dict | None:
+    rows = []
+    for button in buttons or []:
+        label = str(button.get("label") or "").strip()
+        value = str(button.get("value") or button.get("url") or button.get("target") or "").strip()
+        if not label:
+            continue
+        if button.get("type") == "url" or re.match(r"^https?://", value, flags=re.IGNORECASE):
+            rows.append([{"text": label, "url": value}])
+        else:
+            rows.append([{"text": label, "callback_data": value or label}])
+    return {"inline_keyboard": rows} if rows else None
+
+
 def bot_to_dict(bot: Bot) -> dict:
+    token = resolve_bot_token(bot)
     return {
         "id": bot.id,
         "name": bot.name,
@@ -61,6 +157,9 @@ def bot_to_dict(bot: Bot) -> dict:
         "is_active": bot.is_active,
         "created_at": bot.created_at.isoformat() if bot.created_at else None,
         "webhook_path": f"/api/telegram/webhook/{bot.id}",
+        "token_present": bool(token),
+        "token_hint": mask_token(token),
+        "telegram_verified": bot.status == "online" and bool(token),
     }
 
 
@@ -614,6 +713,12 @@ def send_campaign(campaign_id):
         campaign.bot_id = bot.id if bot else None
     if campaign.bot_id is None:
         return jsonify({"error": "create a bot before sending a campaign"}), 400
+    bot = Bot.query.filter_by(tenant_id=tid, id=campaign.bot_id).first()
+    token = resolve_bot_token(bot) if bot else None
+    if campaign.mode == "real" and not token:
+        campaign.status = "blocked"
+        db.session.commit()
+        return jsonify({"error": "Telegram token missing for real broadcast", "campaign": campaign_to_dict(campaign)}), 400
 
     post = Post(
         tenant_id=tid,
@@ -624,14 +729,45 @@ def send_campaign(campaign_id):
     db.session.add(post)
     db.session.flush()
 
+    live_sent = 0
+    live_failed = 0
+    reply_markup = inline_keyboard(campaign.buttons)
     for user in users:
-        db.session.add(Notification(tenant_id=tid, user_id=user.id, post_id=post.id, status="queued"))
+        notification = Notification(tenant_id=tid, user_id=user.id, post_id=post.id, status="queued")
+        if campaign.mode == "real" and token:
+            result = telegram_api(
+                token,
+                "sendMessage",
+                {
+                    "chat_id": user.telegram_id,
+                    "text": campaign.message or campaign.title,
+                    **({"reply_markup": reply_markup} if reply_markup else {}),
+                },
+            )
+            if result.get("ok"):
+                notification.status = "sent"
+                notification.sent_at = now()
+                live_sent += 1
+            else:
+                notification.status = "failed"
+                live_failed += 1
+        db.session.add(notification)
 
     campaign.status = "sent" if users else "ready"
     campaign.sent_count = len(users)
     campaign.last_sent_at = now()
     db.session.commit()
-    return jsonify({"status": campaign.status, "queued_notifications": len(users), "campaign": campaign_to_dict(campaign)})
+    return jsonify(
+        {
+            "status": campaign.status,
+            "queued_notifications": len(users),
+            "live_delivery_attempted": campaign.mode == "real",
+            "live_sent": live_sent,
+            "live_failed": live_failed,
+            "delivery_status": "telegram_sendMessage" if campaign.mode == "real" else "queued_only",
+            "campaign": campaign_to_dict(campaign),
+        }
+    )
 
 
 @api.get("/bots")
@@ -656,13 +792,80 @@ def create_bot():
         name=name,
         username=username,
         category=(payload.get("category") or "General").strip(),
-        status=(payload.get("status") or "online").lower(),
+        status=(payload.get("status") or "token_saved").lower(),
         token_hash=token_hash(token),
         is_active=True,
     )
     db.session.add(bot)
+    db.session.flush()
+    RUNTIME_BOT_TOKENS[bot.id] = token
+    if payload.get("verify", True):
+        sync_bot_with_telegram(bot)
     db.session.commit()
     return jsonify(bot_to_dict(bot)), 201
+
+
+@api.post("/telegram/bots/<bot_id>/check")
+def check_telegram_bot(bot_id):
+    bot = Bot.query.filter_by(tenant_id=tenant_id(), id=bot_id).first()
+    if bot is None:
+        return jsonify({"error": "bot not found"}), 404
+    result = sync_bot_with_telegram(bot)
+    return jsonify(result), 200 if result["ok"] else 400
+
+
+@api.post("/telegram/bots/<bot_id>/set-webhook")
+def set_telegram_webhook(bot_id):
+    bot = Bot.query.filter_by(tenant_id=tenant_id(), id=bot_id).first()
+    if bot is None:
+        return jsonify({"error": "bot not found"}), 404
+    token = resolve_bot_token(bot)
+    if not token:
+        return jsonify({"error": "Telegram token missing"}), 400
+    payload = request.get_json(silent=True) or {}
+    webhook_url = (payload.get("webhook_url") or "").strip()
+    if not webhook_url.startswith("https://"):
+        return jsonify({"error": "webhook_url must be https"}), 400
+    result = telegram_api(token, "setWebhook", {"url": webhook_url})
+    return (
+        jsonify(
+            {
+                "status": "webhook_set" if result.get("ok") else "webhook_failed",
+                "ok": bool(result.get("ok")),
+                "webhook_url": webhook_url,
+                "description": result.get("description"),
+                "bot": bot_to_dict(bot),
+            }
+        ),
+        200 if result.get("ok") else 400,
+    )
+
+
+@api.post("/telegram/bots/<bot_id>/send-test")
+def send_telegram_test_message(bot_id):
+    bot = Bot.query.filter_by(tenant_id=tenant_id(), id=bot_id).first()
+    if bot is None:
+        return jsonify({"error": "bot not found"}), 404
+    token = resolve_bot_token(bot)
+    if not token:
+        return jsonify({"error": "Telegram token missing"}), 400
+    payload = request.get_json(silent=True) or {}
+    chat_id = str(payload.get("chat_id") or "").strip()
+    if not chat_id:
+        return jsonify({"error": "chat_id is required"}), 400
+    result = telegram_api(token, "sendMessage", {"chat_id": chat_id, "text": payload.get("message") or "FORAGRAMM test mesaji"})
+    return (
+        jsonify(
+            {
+                "status": "sent" if result.get("ok") else "failed",
+                "ok": bool(result.get("ok")),
+                "chat_id": chat_id,
+                "message_id": (result.get("result") or {}).get("message_id"),
+                "description": result.get("description"),
+            }
+        ),
+        200 if result.get("ok") else 400,
+    )
 
 
 @api.get("/users")
@@ -762,6 +965,15 @@ def telegram_webhook(bot_id):
         return jsonify({"error": "bot not found"}), 404
     update = request.get_json(silent=True) or {}
     user, subscription, event = upsert_telegram_identity(bot, update)
+    if event.command == "/start":
+        telegram_api(
+            resolve_bot_token(bot),
+            "sendMessage",
+            {
+                "chat_id": user.telegram_id,
+                "text": "FORAGRAMM ailesine hos geldin. Sana ozel kampanyalari buradan takip edebilirsin.",
+            },
+        )
     return jsonify(
         {
             "status": "accepted",

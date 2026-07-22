@@ -86,6 +86,7 @@ import {
 } from 'recharts'
 import clsx from 'clsx'
 import {
+  checkTelegramBot,
   createBot,
   createCampaign,
   createContentChannel,
@@ -103,7 +104,9 @@ import {
   publishFlow,
   runTelegramTestUpdate,
   sendCampaign,
+  sendTelegramTestMessage,
   setApiBaseUrl,
+  setTelegramWebhook,
   simulateContentPoolItem,
   type ApiUser,
   type BotRecord,
@@ -1265,7 +1268,7 @@ function Broadcast() {
           </div>
           {sendCampaignMutation.data && (
             <div className="rounded-lg border border-lime-300/15 bg-lime-300/10 p-3 text-xs leading-5 text-lime-100">
-              {sendCampaignMutation.data.queued_notifications} notification kuyruga alindi.
+              {sendCampaignMutation.data.queued_notifications} notification kuyruga alindi. Live: {sendCampaignMutation.data.live_sent ?? 0} gitti, {sendCampaignMutation.data.live_failed ?? 0} hata.
             </div>
           )}
         </div>
@@ -1354,6 +1357,8 @@ function LiveBotManager() {
               </div>
               <Field label="Webhook" value={bot.webhook_path} />
               <Field label="Kategori" value={bot.category || 'General'} />
+              <Field label="Token" value={bot.token_present ? `Bagli ${bot.token_hint ? `(${bot.token_hint})` : ''}` : 'Yok'} />
+              <Field label="Telegram" value={bot.telegram_verified ? 'Verified' : bot.last_error || bot.status} />
               <Field label="Kayıt" value={formatDateTime(bot.created_at)} />
               <div className="grid grid-cols-3 gap-2">
                 {['Flow', 'Campaign', 'Operator'].map((item) => (
@@ -1410,6 +1415,8 @@ function StaticBotManager() {
 function TelegramPanel() {
   const queryClient = useQueryClient()
   const [testMessage, setTestMessage] = useState('')
+  const [testChatId, setTestChatId] = useState('')
+  const [webhookBaseUrl, setWebhookBaseUrl] = useState(() => (typeof window === 'undefined' ? '' : window.location.origin))
   const [botForm, setBotForm] = useState({
     name: 'FORAGRAMM Sponsor Bot',
     username: '@foragrammsponsorbot',
@@ -1422,6 +1429,8 @@ function TelegramPanel() {
   const { data: apiCampaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: getCampaigns })
   const { data: apiSchema } = useQuery({ queryKey: ['telegram-schema'], queryFn: getTelegramSchema })
   const firstBotId = apiBots[0]?.id
+  const selectedBot = apiBots.find((bot) => bot.id === firstBotId)
+  const webhookUrl = selectedBot ? `${webhookBaseUrl.replace(/\/+$/, '')}${selectedBot.webhook_path}` : ''
   const apiTelegramBots = apiBots.map((bot) => [
     bot.name,
     bot.username,
@@ -1437,7 +1446,7 @@ function TelegramPanel() {
         name: botForm.name,
         username: botForm.username,
         category: botForm.category,
-        token: botForm.token || `local-token-${Date.now()}`,
+        token: botForm.token,
       }),
     onSuccess: (bot) => {
       setTestMessage(`${bot.username} baglandi`)
@@ -1457,6 +1466,38 @@ function TelegramPanel() {
       queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
     },
     onError: (error) => setTestMessage(error instanceof Error ? error.message : 'Test başarısız'),
+  })
+
+  const checkBotMutation = useMutation({
+    mutationFn: () => {
+      if (!firstBotId) throw new Error('Once bot ekle')
+      return checkTelegramBot(firstBotId)
+    },
+    onSuccess: (result) => {
+      setTestMessage(result.ok ? `${result.bot?.username ?? 'Bot'} Telegram tarafinda dogrulandi` : result.description || 'Dogrulama basarisiz')
+      queryClient.invalidateQueries({ queryKey: ['bots'] })
+    },
+    onError: (error) => setTestMessage(error instanceof Error ? error.message : 'Telegram kontrolu basarisiz'),
+  })
+  const webhookMutation = useMutation({
+    mutationFn: () => {
+      if (!firstBotId) throw new Error('Once bot ekle')
+      if (!webhookUrl.startsWith('https://')) throw new Error('Webhook icin yayindaki HTTPS adres gerekir')
+      return setTelegramWebhook(firstBotId, webhookUrl)
+    },
+    onSuccess: (result) => {
+      setTestMessage(result.ok ? `Webhook kuruldu: ${result.webhook_url}` : result.description || 'Webhook kurulamadi')
+      queryClient.invalidateQueries({ queryKey: ['bots'] })
+    },
+    onError: (error) => setTestMessage(error instanceof Error ? error.message : 'Webhook kurulamadi'),
+  })
+  const sendTestMessageMutation = useMutation({
+    mutationFn: () => {
+      if (!firstBotId) throw new Error('Once bot ekle')
+      return sendTelegramTestMessage(firstBotId, testChatId, 'FORAGRAMM test mesaji')
+    },
+    onSuccess: (result) => setTestMessage(result.ok ? `Test mesaji gitti: ${result.chat_id}` : result.description || 'Test mesaji gonderilemedi'),
+    onError: (error) => setTestMessage(error instanceof Error ? error.message : 'Test mesaji gonderilemedi'),
   })
 
   const telegramBots = [
@@ -1531,7 +1572,28 @@ function TelegramPanel() {
                 onChange={(event) => setBotForm((current) => ({ ...current, token: event.target.value }))}
               />
             </label>
+            <div className="grid grid-cols-2 gap-2">
+              <MiniStat label="Token" value={selectedBot?.token_present ? 'Var' : 'Yok'} />
+              <MiniStat label="Telegram" value={selectedBot?.telegram_verified ? 'Verified' : selectedBot?.status || 'Bekliyor'} />
+            </div>
             <Field label="Webhook" value={apiBots[0]?.webhook_path || '/api/telegram/webhook/local'} />
+            <label className="block text-xs text-emerald-50/48">
+              Public webhook URL
+              <input
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={webhookBaseUrl}
+                onChange={(event) => setWebhookBaseUrl(event.target.value)}
+              />
+            </label>
+            <label className="block text-xs text-emerald-50/48">
+              Test chat id
+              <input
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                placeholder="Telegram chat id"
+                value={testChatId}
+                onChange={(event) => setTestChatId(event.target.value)}
+              />
+            </label>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -1544,10 +1606,36 @@ function TelegramPanel() {
               <button
                 type="button"
                 className="h-11 rounded-lg bg-emerald-400 text-sm font-semibold text-[#042012] disabled:opacity-60"
-                disabled={connectBotMutation.isPending}
+                disabled={connectBotMutation.isPending || !botForm.token.trim()}
                 onClick={() => connectBotMutation.mutate()}
               >
                 Bağla
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                className="h-10 rounded-lg border border-white/8 bg-white/[0.035] text-xs font-medium text-emerald-100 disabled:opacity-60"
+                disabled={checkBotMutation.isPending || !firstBotId}
+                onClick={() => checkBotMutation.mutate()}
+              >
+                Token check
+              </button>
+              <button
+                type="button"
+                className="h-10 rounded-lg border border-white/8 bg-white/[0.035] text-xs font-medium text-emerald-100 disabled:opacity-60"
+                disabled={webhookMutation.isPending || !firstBotId}
+                onClick={() => webhookMutation.mutate()}
+              >
+                Webhook kur
+              </button>
+              <button
+                type="button"
+                className="h-10 rounded-lg border border-white/8 bg-white/[0.035] text-xs font-medium text-emerald-100 disabled:opacity-60"
+                disabled={sendTestMessageMutation.isPending || !firstBotId || !testChatId}
+                onClick={() => sendTestMessageMutation.mutate()}
+              >
+                Mesaj at
               </button>
             </div>
             <div className="grid grid-cols-3 gap-2">

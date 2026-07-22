@@ -13,7 +13,7 @@ https://github.com/birdizidize-boop/forapp
 Son push edilen commit:
 
 ```txt
-05a084d Fix local AWS CLI wrapper
+main branch guncel
 ```
 
 Amplify frontend yayini icin repo hazir. Backend icin Elastic Beanstalk deploy scripti de hazir, fakat AWS CLI credentials henuz bu bilgisayara girilmedigi icin backend deploy baslatilamadi.
@@ -68,6 +68,25 @@ subscriptions
 telegram_action_events
 ```
 
+Gercek Telegram baglantisi icin:
+
+```txt
+POST /api/telegram/bots/<bot_id>/check
+POST /api/telegram/bots/<bot_id>/set-webhook
+POST /api/telegram/bots/<bot_id>/send-test
+POST /api/telegram/webhook/<bot_id>
+```
+
+`set-webhook` icin public HTTPS URL gerekir. Lokal `127.0.0.1` adresinde webhook kurulmaz; Render, AWS, Sites veya baska HTTPS host uzerinden kurulur.
+
+Bot tokenleri API cevaplarinda geri donmez. Backend calisma aninda panelden girilen tokeni kullanir; production restart sonrasi tokenin kalici olmasi icin env degiskeni verilebilir:
+
+```txt
+TELEGRAM_BOT_TOKEN_FORAGRAMMSPONSORBOT=123456789:botfather-token
+```
+
+Env suffix'i bot id veya username'den uretilir. Ornek `@foragrammsponsorbot` icin `FORAGRAMMSPONSORBOT`.
+
 ### CRM
 
 Kullanicilar:
@@ -112,6 +131,19 @@ Varsayilan adres:
 
 ```txt
 http://localhost:5173
+```
+
+Sites/worker paketiyle yerel calistirma:
+
+```powershell
+pnpm run build:sites
+pnpm run serve:sites
+```
+
+Varsayilan adres:
+
+```txt
+http://127.0.0.1:5177
 ```
 
 ### 2. Backend

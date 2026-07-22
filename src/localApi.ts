@@ -106,6 +106,9 @@ const createSeedState = (): LocalState => {
       is_active: true,
       created_at: createdAt,
       webhook_path: '/api/telegram/webhook/bot_sponsor',
+      token_present: false,
+      token_hint: null,
+      telegram_verified: false,
     },
     {
       id: 'bot_bonus',
@@ -116,6 +119,9 @@ const createSeedState = (): LocalState => {
       is_active: true,
       created_at: createdAt,
       webhook_path: '/api/telegram/webhook/bot_bonus',
+      token_present: false,
+      token_hint: null,
+      telegram_verified: false,
     },
     {
       id: 'bot_vip',
@@ -126,6 +132,9 @@ const createSeedState = (): LocalState => {
       is_active: false,
       created_at: createdAt,
       webhook_path: '/api/telegram/webhook/bot_vip',
+      token_present: false,
+      token_hint: null,
+      telegram_verified: false,
     },
   ]
 
@@ -371,15 +380,19 @@ export async function localApiFetch<T>(path: string, init?: RequestInit): Promis
   if (method === 'POST' && cleanPath === '/bots') {
     const payload = readBody<CreateBotPayload>(init)
     const username = payload.username?.startsWith('@') ? payload.username : `@${payload.username || 'foragramm_bot'}`
+    const botId = makeId('bot')
     const bot: BotRecord = {
-      id: makeId('bot'),
+      id: botId,
       name: payload.name || 'FORAGRAMM Bot',
       username,
       category: payload.category || 'Sponsor',
-      status: 'online',
+      status: payload.token ? 'token_saved' : 'online',
       is_active: true,
       created_at: nowIso(),
-      webhook_path: `/api/telegram/webhook/${makeId('webhook')}`,
+      webhook_path: `/api/telegram/webhook/${botId}`,
+      token_present: Boolean(payload.token),
+      token_hint: payload.token ? `${payload.token.slice(0, 4)}...${payload.token.slice(-4)}` : null,
+      telegram_verified: false,
     }
     state.bots.unshift(bot)
     saveState(state)
@@ -469,13 +482,65 @@ export async function localApiFetch<T>(path: string, init?: RequestInit): Promis
       sent_at: null,
     }))
     state.notifications.unshift(...notifications)
+    const liveDelivery = campaign.mode === 'real' && Boolean(state.bots.find((bot) => bot.id === campaign.bot_id)?.token_present)
     campaign.status = state.users.length > 0 ? 'sent' : 'ready'
     campaign.sent_count = state.users.length
     campaign.clicked_count = Math.floor(state.users.length * 0.28)
     campaign.completed_count = Math.floor(state.users.length * 0.11)
     campaign.last_sent_at = nowIso()
     saveState(state)
-    return clone({ status: campaign.status, queued_notifications: notifications.length, campaign } satisfies CampaignSendResult) as T
+    return clone({
+      status: campaign.status,
+      queued_notifications: notifications.length,
+      live_delivery_attempted: campaign.mode === 'real',
+      live_sent: liveDelivery ? state.users.length : 0,
+      live_failed: 0,
+      delivery_status: liveDelivery ? 'simulated_live_sent' : 'queued_only',
+      campaign,
+    } satisfies CampaignSendResult) as T
+  }
+
+  const checkBotMatch = cleanPath.match(/^\/telegram\/bots\/([^/]+)\/check$/)
+  if (method === 'POST' && checkBotMatch) {
+    const bot = state.bots.find((entry) => entry.id === checkBotMatch[1])
+    if (!bot) throw new Error('bot not found')
+    bot.last_checked_at = nowIso()
+    bot.telegram_verified = Boolean(bot.token_present)
+    bot.status = bot.token_present ? 'token_saved' : bot.status
+    bot.last_error = bot.token_present ? null : 'Bot token yok'
+    saveState(state)
+    return clone({
+      status: bot.telegram_verified ? 'verified' : 'missing_token',
+      ok: bot.telegram_verified,
+      description: bot.telegram_verified ? 'Local fallback tokenu kabul etti' : 'Bot token yok',
+      bot,
+    }) as T
+  }
+
+  const webhookMatch = cleanPath.match(/^\/telegram\/bots\/([^/]+)\/set-webhook$/)
+  if (method === 'POST' && webhookMatch) {
+    const bot = state.bots.find((entry) => entry.id === webhookMatch[1])
+    if (!bot) throw new Error('bot not found')
+    const payload = readBody<{ webhook_url?: string }>(init)
+    const webhookUrl = payload.webhook_url || bot.webhook_path
+    bot.last_checked_at = nowIso()
+    saveState(state)
+    return clone({ status: 'webhook_saved', ok: true, webhook_url: webhookUrl, description: 'Local fallback webhooku kaydetti', bot }) as T
+  }
+
+  const sendTestMatch = cleanPath.match(/^\/telegram\/bots\/([^/]+)\/send-test$/)
+  if (method === 'POST' && sendTestMatch) {
+    const bot = state.bots.find((entry) => entry.id === sendTestMatch[1])
+    if (!bot) throw new Error('bot not found')
+    const payload = readBody<{ chat_id?: string; message?: string }>(init)
+    if (!payload.chat_id) throw new Error('chat_id is required')
+    return clone({
+      status: 'simulated_sent',
+      ok: true,
+      chat_id: String(payload.chat_id),
+      message_id: Math.floor(Date.now() / 1000),
+      description: `${bot.username} icin test mesaji simule edildi`,
+    }) as T
   }
 
   const testUpdateMatch = cleanPath.match(/^\/telegram\/test-update\/([^/]+)$/)
