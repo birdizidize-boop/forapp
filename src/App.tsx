@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import {
+  addEdge,
   Background,
   Controls,
   Handle,
@@ -7,6 +8,9 @@ import {
   MiniMap,
   Position,
   ReactFlow,
+  useEdgesState,
+  useNodesState,
+  type Connection,
   type Edge,
   type Node,
   type NodeProps,
@@ -88,6 +92,7 @@ import {
   createFlow,
   deleteDuplicateGroup,
   getApiBaseUrl,
+  getApiRuntimeMode,
   getBots,
   getCampaigns,
   getContentPoolOverview,
@@ -530,10 +535,12 @@ function Topbar() {
   const setView = useAppStore((state) => state.setView)
   const queryClient = useQueryClient()
   const [apiUrl, setApiUrlInput] = useState(getApiBaseUrl())
+  const [runtimeMode, setRuntimeMode] = useState(getApiRuntimeMode())
   const title = navItems.find((item) => item.view === view)?.label ?? 'Dashboard'
   const saveApiUrl = () => {
     const normalized = setApiBaseUrl(apiUrl)
     setApiUrlInput(normalized)
+    setRuntimeMode(normalized.startsWith('local://') ? 'local' : 'remote')
     queryClient.invalidateQueries()
   }
 
@@ -587,6 +594,7 @@ function Topbar() {
               <CheckCircle2 size={16} />
             </button>
           </form>
+          <StatusPill tone={runtimeMode === 'remote' ? 'cyan' : 'green'} label={runtimeMode === 'remote' ? 'Remote API' : 'Local live'} />
           <IconButton label="Bildirimler" icon={Bell} />
           <button
             type="button"
@@ -606,13 +614,24 @@ function Topbar() {
 
 function Dashboard() {
   const { data } = useQuery({ queryKey: ['snapshot'], queryFn: fetchPlatformSnapshot })
+  const { data: overview } = useQuery({ queryKey: ['telegram-overview'], queryFn: getTelegramOverview })
 
   if (!data) return <LoadingState />
+  const metrics = overview
+    ? [
+        { label: 'Aktif kullanici', value: `${overview.users}`, change: `${overview.joins} join`, tone: 'green', icon: Users },
+        { label: 'Abonelik', value: `${overview.subscriptions}`, change: `${overview.events} event`, tone: 'cyan', icon: MessageCircle },
+        { label: 'Kuyruk', value: `${overview.queued_notifications}`, change: `${overview.active_campaigns} kampanya`, tone: 'amber', icon: Send },
+        { label: 'Tamamlanan akis', value: `${overview.joins}`, change: `${overview.clicks} click`, tone: 'green', icon: CheckCircle2 },
+        { label: 'Bagli bot', value: `${overview.connected_bots}`, change: `${overview.deposits} deposit`, tone: 'cyan', icon: Bot },
+        { label: 'Goruntulenme', value: `${overview.views}`, change: 'live data', tone: 'green', icon: TimerReset },
+      ] satisfies Metric[]
+    : data.metrics
 
   return (
     <div className="space-y-5">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        {data.metrics.map((metric) => (
+        {metrics.map((metric) => (
           <MetricCard key={metric.label} metric={metric} />
         ))}
       </section>
@@ -707,14 +726,28 @@ function FlowBuilder() {
   const queryClient = useQueryClient()
   const { data: bots = [] } = useQuery({ queryKey: ['bots'], queryFn: getBots })
   const { data: flows = [], isError } = useQuery({ queryKey: ['flows'], queryFn: getFlows })
+  const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges)
   const firstBotId = bots[0]?.id
+  const onConnect = (connection: Connection) =>
+    setEdges((current) =>
+      addEdge(
+        {
+          ...connection,
+          id: `edge-${Date.now()}`,
+          markerEnd: { type: MarkerType.ArrowClosed, color: '#25d366' },
+          style: { stroke: '#25d366', strokeWidth: 2 },
+        },
+        current,
+      ),
+    )
   const saveFlowMutation = useMutation({
     mutationFn: (status: string) =>
       createFlow({
         bot_id: firstBotId,
         name: 'Yeni Uye Karsilama Akisi',
         status,
-        nodes: flowNodes.map((node) => ({
+        nodes: nodes.map((node) => ({
           id: node.id,
           type: node.type,
           position: node.position,
@@ -724,7 +757,7 @@ function FlowBuilder() {
             tone: String(node.data?.tone ?? 'green'),
           },
         })),
-        edges: flowEdges.map((edge) => ({
+        edges: edges.map((edge) => ({
           id: edge.id,
           source: edge.source,
           target: edge.target,
@@ -764,11 +797,22 @@ function FlowBuilder() {
             ['Variable Actions', Tags],
             ['Transfer Operator', Headphones],
             ['Finish Flow', CheckCircle2],
-          ].map(([label, Icon]) => (
+          ].map(([label, Icon], index) => (
             <button
               key={label as string}
               type="button"
               className="flex h-11 w-full items-center gap-3 rounded-lg border border-white/8 bg-white/[0.035] px-3 text-left text-sm text-emerald-50/78 hover:border-emerald-300/25 hover:bg-emerald-400/10"
+              onClick={() =>
+                setNodes((current) => [
+                  ...current,
+                  {
+                    id: `node-${Date.now()}-${index}`,
+                    type: 'fora',
+                    position: { x: 140 + (index % 3) * 110, y: 120 + current.length * 42 },
+                    data: { label: label as string, meta: 'Yeni node', icon: Icon, tone: 'green' },
+                  },
+                ])
+              }
             >
               <Icon size={17} className="text-emerald-300" />
               {label as string}
@@ -806,9 +850,12 @@ function FlowBuilder() {
       >
         <div className="h-[620px] overflow-hidden rounded-lg border border-emerald-400/15 bg-[#06100c]">
           <ReactFlow
-            nodes={flowNodes}
-            edges={flowEdges}
+            nodes={nodes}
+            edges={edges}
             nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
             fitView
             proOptions={{ hideAttribution: true }}
             defaultEdgeOptions={{
@@ -1066,23 +1113,27 @@ function Broadcast() {
   const { data: flows = [] } = useQuery({ queryKey: ['flows'], queryFn: getFlows })
   const { data: liveCampaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: getCampaigns })
   const [form, setForm] = useState({
+    bot_id: '',
+    flow_id: '',
     name: 'Gunluk Sponsor Duyurusu',
     audience: 'all active Telegram users',
     mode: 'test',
     message: 'Bugune ozel sponsor kampanyasi aktif.',
+    work_hours: '09:00-18:00',
+    weekdays: 'mon,tue,wed,thu,fri',
   })
   const createCampaignMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (modeOverride?: string) =>
       createCampaign({
-        bot_id: bots[0]?.id,
-        flow_id: flows[0]?.id,
+        bot_id: form.bot_id || bots[0]?.id,
+        flow_id: form.flow_id || flows[0]?.id,
         name: form.name,
         title: form.name,
         audience: form.audience,
-        mode: form.mode,
+        mode: modeOverride || form.mode,
         message: form.message,
         buttons: [{ label: 'Kampanyaya git', type: 'url', value: 'https://foragramm.io/kampanya' }],
-        filters: { work_hours: '09:00-18:00', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] },
+        filters: { work_hours: form.work_hours, weekdays: form.weekdays.split(',').map((day) => day.trim()).filter(Boolean) },
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] })
@@ -1108,7 +1159,7 @@ function Broadcast() {
             type="button"
             className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012] disabled:opacity-60"
             disabled={createCampaignMutation.isPending}
-            onClick={() => createCampaignMutation.mutate()}
+            onClick={() => createCampaignMutation.mutate(form.mode)}
           >
             <Plus size={16} />
             Kampanya oluştur
@@ -1119,18 +1170,87 @@ function Broadcast() {
       </Panel>
       <Panel title="Gönderim kurulumu" eyebrow="Composer">
         <div className="space-y-4">
-          <Field label="Gönderim tipi" value="Text + Photo + Inline Keyboard" />
-          <Field label="Segment" value="VIP, son 30 gün aktif, İstanbul" />
-          <Field label="Planlama" value="15 Temmuz 2026, 10:30" />
+          <label className="block text-xs text-emerald-50/48">
+            Kampanya adi
+            <input
+              className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+              value={form.name}
+              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-emerald-50/48">
+            Segment
+            <input
+              className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+              value={form.audience}
+              onChange={(event) => setForm((current) => ({ ...current, audience: event.target.value }))}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block text-xs text-emerald-50/48">
+              Bot
+              <select
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-[#07100d] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={form.bot_id || bots[0]?.id || ''}
+                onChange={(event) => setForm((current) => ({ ...current, bot_id: event.target.value }))}
+              >
+                {bots.map((bot) => (
+                  <option key={bot.id} value={bot.id}>
+                    {bot.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs text-emerald-50/48">
+              Flow
+              <select
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-[#07100d] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={form.flow_id || flows[0]?.id || ''}
+                onChange={(event) => setForm((current) => ({ ...current, flow_id: event.target.value }))}
+              >
+                {flows.map((flow) => (
+                  <option key={flow.id} value={flow.id}>
+                    {flow.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block text-xs text-emerald-50/48">
+              Mod
+              <select
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-[#07100d] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={form.mode}
+                onChange={(event) => setForm((current) => ({ ...current, mode: event.target.value }))}
+              >
+                <option value="test">Test</option>
+                <option value="real">Real</option>
+              </select>
+            </label>
+            <label className="block text-xs text-emerald-50/48">
+              Mesai filtresi
+              <input
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={form.work_hours}
+                onChange={(event) => setForm((current) => ({ ...current, work_hours: event.target.value }))}
+              />
+            </label>
+          </div>
+          <label className="block text-xs text-emerald-50/48">
+            Mesaj
+            <textarea
+              className="mt-2 min-h-24 w-full resize-none rounded-lg border border-white/8 bg-white/[0.045] px-3 py-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+              value={form.message}
+              onChange={(event) => setForm((current) => ({ ...current, message: event.target.value }))}
+            />
+          </label>
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
               className="h-11 rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-sm font-medium text-emerald-100 disabled:opacity-60"
               disabled={createCampaignMutation.isPending}
-              onClick={() => {
-                setForm((current) => ({ ...current, mode: 'test' }))
-                createCampaignMutation.mutate()
-              }}
+              onClick={() => createCampaignMutation.mutate('test')}
             >
               Test Broadcast
             </button>
@@ -1290,8 +1410,16 @@ function StaticBotManager() {
 function TelegramPanel() {
   const queryClient = useQueryClient()
   const [testMessage, setTestMessage] = useState('')
+  const [botForm, setBotForm] = useState({
+    name: 'FORAGRAMM Sponsor Bot',
+    username: '@foragrammsponsorbot',
+    category: 'Sports / Casino',
+    token: '',
+  })
   const { data: overview } = useQuery({ queryKey: ['telegram-overview'], queryFn: getTelegramOverview })
   const { data: apiBots = [] } = useQuery({ queryKey: ['bots'], queryFn: getBots })
+  const { data: apiFlows = [] } = useQuery({ queryKey: ['flows'], queryFn: getFlows })
+  const { data: apiCampaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: getCampaigns })
   const { data: apiSchema } = useQuery({ queryKey: ['telegram-schema'], queryFn: getTelegramSchema })
   const firstBotId = apiBots[0]?.id
   const apiTelegramBots = apiBots.map((bot) => [
@@ -1299,10 +1427,25 @@ function TelegramPanel() {
     bot.username,
     bot.category || 'General',
     normalizeStatus(bot.status) === 'online' ? 'Online' : 'Paused',
-    '0 akış',
-    '0 kampanya',
+    `${apiFlows.filter((flow) => flow.bot_id === bot.id).length} akış`,
+    `${apiCampaigns.filter((campaign) => campaign.bot_id === bot.id).length} kampanya`,
   ])
   const liveSchema: Array<[string, string[]]> | null = apiSchema ? Object.entries(apiSchema) : null
+  const connectBotMutation = useMutation({
+    mutationFn: () =>
+      createBot({
+        name: botForm.name,
+        username: botForm.username,
+        category: botForm.category,
+        token: botForm.token || `local-token-${Date.now()}`,
+      }),
+    onSuccess: (bot) => {
+      setTestMessage(`${bot.username} baglandi`)
+      queryClient.invalidateQueries({ queryKey: ['bots'] })
+      queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
+    },
+    onError: (error) => setTestMessage(error instanceof Error ? error.message : 'Bot baglanamadi'),
+  })
   const testMutation = useMutation({
     mutationFn: () => {
       if (!firstBotId) throw new Error('Önce bot ekle')
@@ -1353,23 +1496,57 @@ function TelegramPanel() {
             <p className="text-xs uppercase tracking-[0.24em] text-lime-300">Telegram Only Control</p>
             <h2 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">FORAGRAMM Telegram Bot Panel</h2>
             <div className="mt-5 grid gap-3 sm:grid-cols-3">
-              <MiniStat label="Bağlı bot" value="3" />
-              <MiniStat label="Aktif kampanya" value="7" />
-              <MiniStat label="Bugün deposit" value="842" />
+              <MiniStat label="Bağlı bot" value={`${overview?.connected_bots ?? apiBots.length}`} />
+              <MiniStat label="Aktif kampanya" value={`${overview?.active_campaigns ?? 0}`} />
+              <MiniStat label="Bugün deposit" value={`${overview?.deposits ?? 0}`} />
             </div>
           </div>
         </div>
 
         <Panel title="Bot bağlantısı" eyebrow="Telegram API">
           <div className="space-y-4">
-            <Field label="Bot token" value="7841***:AAH***_masked" />
-            <Field label="Webhook" value="https://api.foragramm.io/telegram/webhook" />
-            <Field label="BotFather username" value="@foragrammsponsorbot" />
+            <label className="block text-xs text-emerald-50/48">
+              Bot adi
+              <input
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={botForm.name}
+                onChange={(event) => setBotForm((current) => ({ ...current, name: event.target.value }))}
+              />
+            </label>
+            <label className="block text-xs text-emerald-50/48">
+              BotFather username
+              <input
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                value={botForm.username}
+                onChange={(event) => setBotForm((current) => ({ ...current, username: event.target.value }))}
+              />
+            </label>
+            <label className="block text-xs text-emerald-50/48">
+              Bot token
+              <input
+                className="mt-2 h-11 w-full rounded-lg border border-white/8 bg-white/[0.045] px-3 text-sm text-emerald-50 outline-none focus:border-emerald-300/35"
+                type="password"
+                placeholder="BotFather token"
+                value={botForm.token}
+                onChange={(event) => setBotForm((current) => ({ ...current, token: event.target.value }))}
+              />
+            </label>
+            <Field label="Webhook" value={apiBots[0]?.webhook_path || '/api/telegram/webhook/local'} />
             <div className="grid grid-cols-2 gap-2">
-              <button type="button" className="h-11 rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-sm font-medium text-emerald-100">
+              <button
+                type="button"
+                className="h-11 rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-sm font-medium text-emerald-100 disabled:opacity-60"
+                disabled={testMutation.isPending || !firstBotId}
+                onClick={() => testMutation.mutate()}
+              >
                 Test et
               </button>
-              <button type="button" className="h-11 rounded-lg bg-emerald-400 text-sm font-semibold text-[#042012]">
+              <button
+                type="button"
+                className="h-11 rounded-lg bg-emerald-400 text-sm font-semibold text-[#042012] disabled:opacity-60"
+                disabled={connectBotMutation.isPending}
+                onClick={() => connectBotMutation.mutate()}
+              >
                 Bağla
               </button>
             </div>
@@ -1821,7 +1998,12 @@ function ContentPool() {
           title="İçerik Havuzu"
           eyebrow="Sponsor channel intake"
           action={
-            <button type="button" className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012]">
+            <button
+              type="button"
+              className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012] disabled:opacity-60"
+              disabled={channelMutation.isPending}
+              onClick={() => channelMutation.mutate()}
+            >
               <Plus size={16} />
               Kanal bağla
             </button>
@@ -1921,10 +2103,10 @@ function ContentPool() {
 
         <Panel title="Günlük özet" eyebrow="Dedup actions">
           <div className="grid grid-cols-2 gap-3">
-            <BigNumber label="Bugün gelen" value="20" icon={FileText} />
-            <BigNumber label="Havuza giren" value="14" icon={FolderOpen} />
-            <BigNumber label="Link hariç" value="4" icon={ShieldX} />
-            <BigNumber label="Sticker hariç" value="2" icon={ShieldX} />
+            <BigNumber label="Bugün gelen" value={`${contentPool?.today.incoming ?? 0}`} icon={FileText} />
+            <BigNumber label="Havuza giren" value={`${contentPool?.today.stored ?? 0}`} icon={FolderOpen} />
+            <BigNumber label="Link hariç" value={`${contentPool?.today.excluded_links ?? 0}`} icon={ShieldX} />
+            <BigNumber label="Sticker hariç" value={`${contentPool?.today.excluded_stickers ?? 0}`} icon={ShieldX} />
           </div>
           <div className="mt-4 rounded-lg border border-amber-300/15 bg-amber-300/10 p-4">
             <p className="font-medium text-amber-100">Benzer mesaj kontrolü</p>

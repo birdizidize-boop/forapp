@@ -1,5 +1,8 @@
+import { localApiFetch } from './localApi'
+
 const API_URL_STORAGE_KEY = 'fora_api_base_url'
-const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000/api'
+const API_RUNTIME_MODE_KEY = 'fora_api_runtime_mode'
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL ?? 'local://browser/api'
 
 const normalizeApiBaseUrl = (value: string) => {
   const trimmed = value.trim().replace(/\/+$/, '')
@@ -16,6 +19,14 @@ const readStoredApiUrl = () => {
 }
 
 export const getApiBaseUrl = () => normalizeApiBaseUrl(readStoredApiUrl() ?? DEFAULT_API_BASE_URL)
+
+export const getApiRuntimeMode = () => {
+  try {
+    return typeof window === 'undefined' ? 'local' : window.localStorage.getItem(API_RUNTIME_MODE_KEY) ?? 'local'
+  } catch {
+    return 'local'
+  }
+}
 
 export const setApiBaseUrl = (value: string) => {
   const normalized = normalizeApiBaseUrl(value)
@@ -181,15 +192,27 @@ export type ContentPoolOverview = {
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-    ...init,
-  })
-  if (!response.ok) {
-    const body = await response.text()
-    throw new Error(body || `API request failed: ${response.status}`)
+  const apiBaseUrl = getApiBaseUrl()
+  if (apiBaseUrl.startsWith('local://')) {
+    window.localStorage.setItem(API_RUNTIME_MODE_KEY, 'local')
+    return localApiFetch<T>(path, init)
   }
-  return response.json() as Promise<T>
+  try {
+    const response = await fetch(`${apiBaseUrl}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+      ...init,
+    })
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(body || `API request failed: ${response.status}`)
+    }
+    window.localStorage.setItem(API_RUNTIME_MODE_KEY, 'remote')
+    return response.json() as Promise<T>
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('API request failed')) throw error
+    window.localStorage.setItem(API_RUNTIME_MODE_KEY, 'local')
+    return localApiFetch<T>(path, init)
+  }
 }
 
 export const getBots = () => apiFetch<BotRecord[]>('/bots')
