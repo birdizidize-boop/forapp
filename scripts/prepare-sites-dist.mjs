@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = resolve(root, "dist");
 const target = resolve(root, "dist", "server", "index.js");
+const apiRuntime = resolve(root, "sites-worker", "api-runtime.js");
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -45,10 +46,12 @@ async function collectFiles(directory) {
 }
 
 await collectFiles(dist);
+const apiRuntimeSource = await readFile(apiRuntime, "utf8");
 await mkdir(dirname(target), { recursive: true });
 await writeFile(
   target,
   `const files = ${JSON.stringify(files)};\n\n` +
+    `${apiRuntimeSource}\n\n` +
     `const notFound = () => new Response("Not found", { status: 404 });\n\n` +
     `const bytes = (base64) => Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));\n\n` +
     `const serve = (path, request) => {\n` +
@@ -65,6 +68,7 @@ await writeFile(
     `export default {\n` +
     `  async fetch(request) {\n` +
     `    const url = new URL(request.url);\n` +
+    `    if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return handleApiRequest(request);\n` +
     `    const path = url.pathname === "/" ? "/index.html" : url.pathname;\n` +
     `    if (files[path]) return serve(path, request);\n` +
     `    const accept = request.headers.get("Accept") || "";\n` +

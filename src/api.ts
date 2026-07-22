@@ -1,8 +1,8 @@
 import { localApiFetch } from './localApi'
 
-const API_URL_STORAGE_KEY = 'fora_api_base_url'
-const API_RUNTIME_MODE_KEY = 'fora_api_runtime_mode'
-const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL ?? 'local://browser/api'
+const API_URL_STORAGE_KEY = 'fora_api_base_url_v2'
+const API_RUNTIME_MODE_KEY = 'fora_api_runtime_mode_v2'
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api'
 
 const normalizeApiBaseUrl = (value: string) => {
   const trimmed = value.trim().replace(/\/+$/, '')
@@ -22,9 +22,9 @@ export const getApiBaseUrl = () => normalizeApiBaseUrl(readStoredApiUrl() ?? DEF
 
 export const getApiRuntimeMode = () => {
   try {
-    return typeof window === 'undefined' ? 'local' : window.localStorage.getItem(API_RUNTIME_MODE_KEY) ?? 'local'
+    return typeof window === 'undefined' ? 'remote' : window.localStorage.getItem(API_RUNTIME_MODE_KEY) ?? 'remote'
   } catch {
-    return 'local'
+    return 'remote'
   }
 }
 
