@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "build:sites": "tsc -b && vite build && node scripts/prepare-sites-dist.mjs",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "serve:sites": "node scripts/serve-sites-dist.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.2",
