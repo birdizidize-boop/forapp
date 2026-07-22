@@ -56,6 +56,29 @@ class FlowEdge(db.Model, TenantMixin):
     condition: Mapped[str | None] = mapped_column(String(255))
 
 
+class Campaign(db.Model, TenantMixin):
+    __tablename__ = "campaigns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    bot_id: Mapped[str | None] = mapped_column(ForeignKey("bots.id"))
+    flow_id: Mapped[str | None] = mapped_column(ForeignKey("flows.id"))
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    audience: Mapped[str] = mapped_column(String(180), default="all")
+    mode: Mapped[str] = mapped_column(String(40), default="test")
+    status: Mapped[str] = mapped_column(String(40), default="draft")
+    title: Mapped[str] = mapped_column(String(180), default="FORAGRAMM duyuru")
+    message: Mapped[str] = mapped_column(Text, default="")
+    buttons: Mapped[list] = mapped_column(JSON, default=list)
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    clicked_count: Mapped[int] = mapped_column(Integer, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    bot = relationship("Bot")
+    flow = relationship("Flow")
+
+
 class UserProfile(db.Model, TenantMixin):
     __tablename__ = "users"
 

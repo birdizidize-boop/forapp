@@ -1,6 +1,7 @@
 from .core import (
     Analytics,
     Bot,
+    Campaign,
     ContentDuplicateGroup,
     ContentFolder,
     ContentPoolItem,
@@ -18,6 +19,7 @@ from .core import (
 __all__ = [
     "Analytics",
     "Bot",
+    "Campaign",
     "ContentDuplicateGroup",
     "ContentFolder",
     "ContentPoolItem",

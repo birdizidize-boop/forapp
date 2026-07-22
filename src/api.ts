@@ -76,6 +76,66 @@ export type TelegramTestResult = {
   user: ApiUser
 }
 
+export type FlowRecord = {
+  id: string
+  bot_id: string
+  bot_name: string | null
+  name: string
+  status: string
+  nodes?: Array<Record<string, unknown>>
+  edges?: Array<Record<string, unknown>>
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type CreateFlowPayload = {
+  bot_id?: string
+  name: string
+  status: string
+  nodes: Array<Record<string, unknown>>
+  edges: Array<Record<string, unknown>>
+}
+
+export type CampaignRecord = {
+  id: string
+  bot_id: string | null
+  bot_name: string | null
+  flow_id: string | null
+  flow_name: string | null
+  name: string
+  audience: string
+  mode: string
+  status: string
+  title: string
+  message: string
+  buttons: Array<Record<string, unknown>>
+  filters: Record<string, unknown>
+  scheduled_at: string | null
+  sent_count: number
+  clicked_count: number
+  completed_count: number
+  last_sent_at: string | null
+  created_at: string | null
+}
+
+export type CreateCampaignPayload = {
+  bot_id?: string
+  flow_id?: string
+  name: string
+  audience: string
+  mode: string
+  title: string
+  message: string
+  buttons?: Array<Record<string, unknown>>
+  filters?: Record<string, unknown>
+}
+
+export type CampaignSendResult = {
+  status: string
+  queued_notifications: number
+  campaign: CampaignRecord
+}
+
 export type ContentFolderRecord = {
   id: string
   name: string
@@ -142,6 +202,22 @@ export const getUsers = () => apiFetch<ApiUser[]>('/users')
 export const getTelegramOverview = () => apiFetch<TelegramOverview>('/telegram/overview')
 
 export const getTelegramSchema = () => apiFetch<Record<string, string[]>>('/telegram/schema')
+
+export const getFlows = () => apiFetch<FlowRecord[]>('/flows')
+
+export const createFlow = (payload: CreateFlowPayload) =>
+  apiFetch<FlowRecord>('/flows', { method: 'POST', body: JSON.stringify(payload) })
+
+export const publishFlow = (flowId: string) =>
+  apiFetch<FlowRecord>(`/flows/${flowId}/publish`, { method: 'POST' })
+
+export const getCampaigns = () => apiFetch<CampaignRecord[]>('/campaigns')
+
+export const createCampaign = (payload: CreateCampaignPayload) =>
+  apiFetch<CampaignRecord>('/campaigns', { method: 'POST', body: JSON.stringify(payload) })
+
+export const sendCampaign = (campaignId: string) =>
+  apiFetch<CampaignSendResult>(`/campaigns/${campaignId}/send`, { method: 'POST' })
 
 export const runTelegramTestUpdate = (botId: string) =>
   apiFetch<TelegramTestResult>(`/telegram/test-update/${botId}`, {

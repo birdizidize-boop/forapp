@@ -83,21 +83,29 @@ import {
 import clsx from 'clsx'
 import {
   createBot,
+  createCampaign,
   createContentChannel,
+  createFlow,
   deleteDuplicateGroup,
   getApiBaseUrl,
   getBots,
+  getCampaigns,
   getContentPoolOverview,
+  getFlows,
   getTelegramOverview,
   getTelegramSchema,
   getUsers,
+  publishFlow,
   runTelegramTestUpdate,
+  sendCampaign,
   setApiBaseUrl,
   simulateContentPoolItem,
   type ApiUser,
   type BotRecord,
+  type CampaignRecord,
   type ContentItemRecord,
   type DuplicateGroupRecord,
+  type FlowRecord,
 } from './api'
 
 const brandLogo = '/foragramm-logo.png'
@@ -696,6 +704,52 @@ function Dashboard() {
 }
 
 function FlowBuilder() {
+  const queryClient = useQueryClient()
+  const { data: bots = [] } = useQuery({ queryKey: ['bots'], queryFn: getBots })
+  const { data: flows = [], isError } = useQuery({ queryKey: ['flows'], queryFn: getFlows })
+  const firstBotId = bots[0]?.id
+  const saveFlowMutation = useMutation({
+    mutationFn: (status: string) =>
+      createFlow({
+        bot_id: firstBotId,
+        name: 'Yeni Uye Karsilama Akisi',
+        status,
+        nodes: flowNodes.map((node) => ({
+          id: node.id,
+          type: node.type,
+          position: node.position,
+          data: {
+            label: String(node.data?.label ?? node.id),
+            meta: String(node.data?.meta ?? ''),
+            tone: String(node.data?.tone ?? 'green'),
+          },
+        })),
+        edges: flowEdges.map((edge) => ({
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          label: typeof edge.label === 'string' ? edge.label : null,
+        })),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['flows'] })
+      queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
+    },
+  })
+  const publishMutation = useMutation({
+    mutationFn: (flowId: string) => publishFlow(flowId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['flows'] }),
+  })
+  const flowStatusLabel = saveFlowMutation.isPending
+    ? 'kaydediliyor'
+    : publishMutation.isPending
+      ? 'yayina aliniyor'
+      : saveFlowMutation.isError || publishMutation.isError
+        ? 'api hata'
+        : isError
+          ? 'api kapali'
+          : `${flows.length} kayitli akis`
+
   return (
     <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
       <Panel title="Node paleti" eyebrow="Drag modules">
@@ -728,8 +782,25 @@ function FlowBuilder() {
         eyebrow="React Flow canvas"
         action={
           <div className="flex items-center gap-2">
-            <IconButton label="Undo" icon={PauseCircle} />
-            <IconButton label="Publish" icon={PlayCircle} active />
+            <StatusPill tone={isError || saveFlowMutation.isError || publishMutation.isError ? 'rose' : 'green'} label={flowStatusLabel} />
+            <button
+              type="button"
+              className="grid size-10 place-items-center rounded-lg border border-emerald-400/15 bg-white/[0.04] text-emerald-100 transition hover:bg-white/[0.07] disabled:opacity-60"
+              aria-label="Taslak kaydet"
+              disabled={saveFlowMutation.isPending}
+              onClick={() => saveFlowMutation.mutate('draft')}
+            >
+              <PauseCircle size={18} />
+            </button>
+            <button
+              type="button"
+              className="grid size-10 place-items-center rounded-lg border border-emerald-300/25 bg-emerald-400 text-[#042012] transition hover:bg-emerald-300 disabled:opacity-60"
+              aria-label="Publish"
+              disabled={saveFlowMutation.isPending}
+              onClick={() => saveFlowMutation.mutate('published')}
+            >
+              <PlayCircle size={18} />
+            </button>
           </div>
         }
       >
@@ -776,10 +847,34 @@ function FlowBuilder() {
           <button
             type="button"
             className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-400 font-semibold text-[#042012]"
+            disabled={saveFlowMutation.isPending}
+            onClick={() => saveFlowMutation.mutate('draft')}
           >
             <Plus size={17} />
-            Node ekle
+            Taslak olarak kaydet
           </button>
+          <div className="rounded-lg border border-white/8 bg-white/[0.035] p-3">
+            <p className="text-xs uppercase tracking-[0.18em] text-emerald-300/70">Kayitli akislar</p>
+            <div className="mt-3 space-y-2">
+              {(flows as FlowRecord[]).slice(0, 3).map((flow) => (
+                <div key={flow.id} className="flex items-center justify-between gap-2 rounded-md bg-black/16 p-2 text-xs">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-emerald-50">{flow.name}</p>
+                    <p className="truncate text-emerald-50/45">{flow.bot_name || flow.bot_id}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md border border-emerald-400/15 px-2 py-1 text-emerald-100 disabled:opacity-60"
+                    disabled={publishMutation.isPending || flow.status === 'published'}
+                    onClick={() => publishMutation.mutate(flow.id)}
+                  >
+                    {flow.status === 'published' ? 'live' : 'publish'}
+                  </button>
+                </div>
+              ))}
+              {flows.length === 0 && <p className="text-xs text-emerald-50/45">Henuz API kaydi yok.</p>}
+            </div>
+          </div>
         </div>
       </Panel>
     </div>
@@ -839,7 +934,10 @@ function Crm() {
         title="Kullanıcı CRM"
         eyebrow={isError ? 'API kapalı, örnek veri gösteriliyor' : 'Live API profiles'}
         action={
-          <button type="button" className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012]">
+          <button
+            type="button"
+            className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012]"
+          >
             <Plus size={16} />
             Kullanıcı ekle
           </button>
@@ -963,13 +1061,55 @@ function LiveChat() {
 }
 
 function Broadcast() {
+  const queryClient = useQueryClient()
+  const { data: bots = [] } = useQuery({ queryKey: ['bots'], queryFn: getBots })
+  const { data: flows = [] } = useQuery({ queryKey: ['flows'], queryFn: getFlows })
+  const { data: liveCampaigns = [] } = useQuery({ queryKey: ['campaigns'], queryFn: getCampaigns })
+  const [form, setForm] = useState({
+    name: 'Gunluk Sponsor Duyurusu',
+    audience: 'all active Telegram users',
+    mode: 'test',
+    message: 'Bugune ozel sponsor kampanyasi aktif.',
+  })
+  const createCampaignMutation = useMutation({
+    mutationFn: () =>
+      createCampaign({
+        bot_id: bots[0]?.id,
+        flow_id: flows[0]?.id,
+        name: form.name,
+        title: form.name,
+        audience: form.audience,
+        mode: form.mode,
+        message: form.message,
+        buttons: [{ label: 'Kampanyaya git', type: 'url', value: 'https://foragramm.io/kampanya' }],
+        filters: { work_hours: '09:00-18:00', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'] },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
+    },
+  })
+  const sendCampaignMutation = useMutation({
+    mutationFn: (campaignId: string) => sendCampaign(campaignId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] })
+      queryClient.invalidateQueries({ queryKey: ['telegram-overview'] })
+    },
+  })
+  const firstCampaignId = liveCampaigns[0]?.id
+
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Panel
         title="Broadcast kampanyaları"
-        eyebrow="Test and real send"
+        eyebrow={createCampaignMutation.isError || sendCampaignMutation.isError ? 'API hata' : 'Test and real send'}
         action={
-          <button type="button" className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012]">
+          <button
+            type="button"
+            className="flex h-10 items-center gap-2 rounded-lg bg-emerald-400 px-3 text-sm font-semibold text-[#042012] disabled:opacity-60"
+            disabled={createCampaignMutation.isPending}
+            onClick={() => createCampaignMutation.mutate()}
+          >
             <Plus size={16} />
             Kampanya oluştur
           </button>
@@ -983,13 +1123,31 @@ function Broadcast() {
           <Field label="Segment" value="VIP, son 30 gün aktif, İstanbul" />
           <Field label="Planlama" value="15 Temmuz 2026, 10:30" />
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" className="h-11 rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-sm font-medium text-emerald-100">
+            <button
+              type="button"
+              className="h-11 rounded-lg border border-emerald-400/25 bg-emerald-400/10 text-sm font-medium text-emerald-100 disabled:opacity-60"
+              disabled={createCampaignMutation.isPending}
+              onClick={() => {
+                setForm((current) => ({ ...current, mode: 'test' }))
+                createCampaignMutation.mutate()
+              }}
+            >
               Test Broadcast
             </button>
-            <button type="button" className="h-11 rounded-lg bg-emerald-400 text-sm font-semibold text-[#042012]">
-              Real Broadcast
+            <button
+              type="button"
+              className="h-11 rounded-lg bg-emerald-400 text-sm font-semibold text-[#042012] disabled:opacity-60"
+              disabled={!firstCampaignId || sendCampaignMutation.isPending}
+              onClick={() => firstCampaignId && sendCampaignMutation.mutate(firstCampaignId)}
+            >
+              {sendCampaignMutation.isPending ? 'Queue yaziliyor' : 'Real Broadcast'}
             </button>
           </div>
+          {sendCampaignMutation.data && (
+            <div className="rounded-lg border border-lime-300/15 bg-lime-300/10 p-3 text-xs leading-5 text-lime-100">
+              {sendCampaignMutation.data.queued_notifications} notification kuyruga alindi.
+            </div>
+          )}
         </div>
       </Panel>
     </div>
@@ -2115,9 +2273,23 @@ function BigNumber({ label, value, icon: Icon }: { label: string; value: string;
 }
 
 function CampaignList({ compact = false }: { compact?: boolean }) {
+  const { data: liveCampaigns = [], isError } = useQuery({ queryKey: ['campaigns'], queryFn: getCampaigns })
+  const rows: Array<Campaign & { id?: string }> = liveCampaigns.length
+    ? (liveCampaigns as CampaignRecord[]).map((campaign) => ({
+        id: campaign.id,
+        name: campaign.name,
+        audience: campaign.audience,
+        mode: campaign.mode === 'real' ? 'Real' : 'Test',
+        sent: campaign.sent_count,
+        clicked: campaign.clicked_count,
+        completed: campaign.completed_count,
+        status: campaign.status === 'sent' ? 'Running' : campaign.status === 'scheduled' ? 'Scheduled' : 'Draft',
+      }))
+    : campaigns
+
   return (
     <div className="space-y-3">
-      {campaigns.map((campaign) => (
+      {rows.map((campaign) => (
         <div key={campaign.name} className="rounded-lg border border-white/8 bg-white/[0.035] p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -2138,6 +2310,7 @@ function CampaignList({ compact = false }: { compact?: boolean }) {
           )}
         </div>
       ))}
+      {isError && <p className="text-xs text-amber-100/80">API kapali, ornek kampanyalar gosteriliyor.</p>}
     </div>
   )
 }

@@ -13,9 +13,15 @@ from app.extensions import db
 from app.models.core import (
     Analytics,
     Bot,
+    Campaign,
     ContentDuplicateGroup,
     ContentFolder,
     ContentPoolItem,
+    Flow,
+    FlowEdge,
+    FlowNode,
+    Notification,
+    Post,
     SponsorChannel,
     Subscription,
     TelegramActionEvent,
@@ -132,6 +138,64 @@ def duplicate_group_to_dict(group: ContentDuplicateGroup) -> dict:
     }
 
 
+def flow_to_dict(flow: Flow, include_graph: bool = True) -> dict:
+    data = {
+        "id": flow.id,
+        "bot_id": flow.bot_id,
+        "bot_name": flow.bot.name if flow.bot else None,
+        "name": flow.name,
+        "status": flow.status,
+        "created_at": flow.created_at.isoformat() if flow.created_at else None,
+        "updated_at": flow.updated_at.isoformat() if flow.updated_at else None,
+    }
+    if include_graph:
+        nodes = FlowNode.query.filter_by(tenant_id=flow.tenant_id, flow_id=flow.id).all()
+        edges = FlowEdge.query.filter_by(tenant_id=flow.tenant_id, flow_id=flow.id).all()
+        data["nodes"] = [
+            {
+                "id": node.id,
+                "type": node.type,
+                "label": node.label,
+                "payload": node.payload or {},
+            }
+            for node in nodes
+        ]
+        data["edges"] = [
+            {
+                "id": edge.id,
+                "source": edge.source_node_id,
+                "target": edge.target_node_id,
+                "condition": edge.condition,
+            }
+            for edge in edges
+        ]
+    return data
+
+
+def campaign_to_dict(campaign: Campaign) -> dict:
+    return {
+        "id": campaign.id,
+        "bot_id": campaign.bot_id,
+        "bot_name": campaign.bot.name if campaign.bot else None,
+        "flow_id": campaign.flow_id,
+        "flow_name": campaign.flow.name if campaign.flow else None,
+        "name": campaign.name,
+        "audience": campaign.audience,
+        "mode": campaign.mode,
+        "status": campaign.status,
+        "title": campaign.title,
+        "message": campaign.message,
+        "buttons": campaign.buttons or [],
+        "filters": campaign.filters or {},
+        "scheduled_at": campaign.scheduled_at.isoformat() if campaign.scheduled_at else None,
+        "sent_count": campaign.sent_count,
+        "clicked_count": campaign.clicked_count,
+        "completed_count": campaign.completed_count,
+        "last_sent_at": campaign.last_sent_at.isoformat() if campaign.last_sent_at else None,
+        "created_at": campaign.created_at.isoformat() if campaign.created_at else None,
+    }
+
+
 def ensure_demo_data() -> None:
     tid = tenant_id()
     if Bot.query.filter_by(tenant_id=tid).first():
@@ -182,6 +246,33 @@ def ensure_demo_data() -> None:
             Analytics(tenant_id=tid, bot=bots[2], views=42600, clicks=7840, joins=1180, deposits=218),
         ]
     )
+    db.session.flush()
+    welcome_flow = Flow(tenant_id=tid, bot_id=bots[0].id, name="Yeni Uye Karsilama Akisi", status="published")
+    db.session.add(welcome_flow)
+    db.session.flush()
+    db.session.add_all(
+        [
+            FlowNode(tenant_id=tid, id="trigger", flow_id=welcome_flow.id, type="trigger", label="/start", payload={"command": "/start"}),
+            FlowNode(tenant_id=tid, id="welcome", flow_id=welcome_flow.id, type="message", label="Hos geldin", payload={"text": "FORAGRAMM ailesine hos geldin."}),
+            FlowNode(tenant_id=tid, id="keyboard", flow_id=welcome_flow.id, type="inline_keyboard", label="Secenekler", payload={"buttons": [{"label": "Bonus", "target": "bonus_flow"}, {"label": "Destek", "target": "operator"}]}),
+            FlowEdge(tenant_id=tid, flow_id=welcome_flow.id, source_node_id="trigger", target_node_id="welcome"),
+            FlowEdge(tenant_id=tid, flow_id=welcome_flow.id, source_node_id="welcome", target_node_id="keyboard"),
+        ]
+    )
+    campaign = Campaign(
+        tenant_id=tid,
+        bot_id=bots[0].id,
+        flow_id=welcome_flow.id,
+        name="Gunluk Sponsor Duyurusu",
+        audience="all active Telegram users",
+        mode="test",
+        status="draft",
+        title="FORAGRAMM kampanya",
+        message="Bugune ozel sponsor kampanyasi aktif.",
+        buttons=[{"label": "Kampanyaya git", "type": "url", "value": "https://foragramm.io/kampanya"}],
+        filters={"work_hours": "09:00-18:00", "weekdays": ["mon", "tue", "wed", "thu", "fri"]},
+    )
+    db.session.add(campaign)
     db.session.commit()
 
 
@@ -349,6 +440,8 @@ def dashboard():
             "daily_messages": event_count,
             "completed_flows": analytics[2],
             "average_conversation_seconds": 168,
+            "campaigns": Campaign.query.filter_by(tenant_id=tid).count(),
+            "queued_notifications": Notification.query.filter_by(tenant_id=tid, status="queued").count(),
             "views": analytics[0],
             "clicks": analytics[1],
             "joins": analytics[2],
@@ -382,6 +475,163 @@ def node_types():
             "finish_flow",
         ]
     )
+
+
+@api.get("/flows")
+def list_flows():
+    flows = Flow.query.filter_by(tenant_id=tenant_id()).order_by(Flow.updated_at.desc()).all()
+    return jsonify([flow_to_dict(flow, include_graph=False) for flow in flows])
+
+
+@api.post("/flows")
+def create_flow():
+    payload = request.get_json(silent=True) or {}
+    tid = tenant_id()
+    bot = Bot.query.filter_by(tenant_id=tid, id=payload.get("bot_id")).first()
+    if bot is None:
+        bot = Bot.query.filter_by(tenant_id=tid).order_by(Bot.created_at.asc()).first()
+    if bot is None:
+        return jsonify({"error": "create a bot before saving a flow"}), 400
+
+    name = (payload.get("name") or "Yeni Telegram Akisi").strip()
+    status = (payload.get("status") or "draft").strip().lower()
+    flow = Flow(tenant_id=tid, bot_id=bot.id, name=name, status=status)
+    db.session.add(flow)
+    db.session.flush()
+
+    nodes = payload.get("nodes") or []
+    edges = payload.get("edges") or []
+    if not nodes:
+        nodes = [
+            {"id": "trigger", "type": "trigger", "label": "/start", "payload": {"command": "/start"}},
+            {"id": "message", "type": "message", "label": "Karsilama mesaji", "payload": {"text": payload.get("message") or "Hos geldin."}},
+        ]
+        edges = [{"id": "e1", "source": "trigger", "target": "message", "condition": None}]
+
+    node_ids = set()
+    client_node_ids: dict[str, str] = {}
+    for index, node in enumerate(nodes):
+        client_id = str(node.get("id") or f"node-{index + 1}")
+        node_id = f"node-{uuid4().hex[:12]}"
+        client_node_ids[client_id] = node_id
+        node_ids.add(node_id)
+        data = node.get("data") or {}
+        db.session.add(
+            FlowNode(
+                tenant_id=tid,
+                id=node_id,
+                flow_id=flow.id,
+                type=str(node.get("type") or data.get("type") or "message"),
+                label=str(data.get("label") or node.get("label") or node_id),
+                payload={**(node.get("payload") or data), "client_node_id": client_id},
+            )
+        )
+
+    for index, edge in enumerate(edges):
+        source = client_node_ids.get(str(edge.get("source") or edge.get("source_node_id") or ""))
+        target = client_node_ids.get(str(edge.get("target") or edge.get("target_node_id") or ""))
+        if source not in node_ids or target not in node_ids:
+            continue
+        db.session.add(
+            FlowEdge(
+                tenant_id=tid,
+                id=f"edge-{uuid4().hex[:12]}",
+                flow_id=flow.id,
+                source_node_id=source,
+                target_node_id=target,
+                condition=edge.get("label") or edge.get("condition"),
+            )
+        )
+
+    db.session.commit()
+    return jsonify(flow_to_dict(flow)), 201
+
+
+@api.get("/flows/<flow_id>")
+def get_flow(flow_id):
+    flow = Flow.query.filter_by(tenant_id=tenant_id(), id=flow_id).first()
+    if flow is None:
+        return jsonify({"error": "flow not found"}), 404
+    return jsonify(flow_to_dict(flow))
+
+
+@api.post("/flows/<flow_id>/publish")
+def publish_flow(flow_id):
+    flow = Flow.query.filter_by(tenant_id=tenant_id(), id=flow_id).first()
+    if flow is None:
+        return jsonify({"error": "flow not found"}), 404
+    flow.status = "published"
+    db.session.commit()
+    return jsonify(flow_to_dict(flow))
+
+
+@api.get("/campaigns")
+def list_campaigns():
+    campaigns = Campaign.query.filter_by(tenant_id=tenant_id()).order_by(Campaign.created_at.desc()).all()
+    return jsonify([campaign_to_dict(campaign) for campaign in campaigns])
+
+
+@api.post("/campaigns")
+def create_campaign():
+    payload = request.get_json(silent=True) or {}
+    tid = tenant_id()
+    name = (payload.get("name") or payload.get("title") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+
+    bot = Bot.query.filter_by(tenant_id=tid, id=payload.get("bot_id")).first()
+    if bot is None:
+        bot = Bot.query.filter_by(tenant_id=tid).order_by(Bot.created_at.asc()).first()
+    flow = Flow.query.filter_by(tenant_id=tid, id=payload.get("flow_id")).first() if payload.get("flow_id") else None
+
+    campaign = Campaign(
+        tenant_id=tid,
+        bot_id=bot.id if bot else None,
+        flow_id=flow.id if flow else None,
+        name=name,
+        audience=(payload.get("audience") or "all").strip(),
+        mode=(payload.get("mode") or "test").strip().lower(),
+        status=(payload.get("status") or "draft").strip().lower(),
+        title=(payload.get("title") or name).strip(),
+        message=(payload.get("message") or "").strip(),
+        buttons=payload.get("buttons") or [],
+        filters=payload.get("filters") or {},
+    )
+    db.session.add(campaign)
+    db.session.commit()
+    return jsonify(campaign_to_dict(campaign)), 201
+
+
+@api.post("/campaigns/<campaign_id>/send")
+def send_campaign(campaign_id):
+    tid = tenant_id()
+    campaign = Campaign.query.filter_by(tenant_id=tid, id=campaign_id).first()
+    if campaign is None:
+        return jsonify({"error": "campaign not found"}), 404
+    users = UserProfile.query.filter_by(tenant_id=tid).order_by(UserProfile.last_seen_at.desc()).all()
+    if campaign.bot_id is None:
+        bot = Bot.query.filter_by(tenant_id=tid).order_by(Bot.created_at.asc()).first()
+        campaign.bot_id = bot.id if bot else None
+    if campaign.bot_id is None:
+        return jsonify({"error": "create a bot before sending a campaign"}), 400
+
+    post = Post(
+        tenant_id=tid,
+        bot_id=campaign.bot_id,
+        title=campaign.title,
+        content=campaign.message or campaign.title,
+    )
+    db.session.add(post)
+    db.session.flush()
+
+    for user in users:
+        db.session.add(Notification(tenant_id=tid, user_id=user.id, post_id=post.id, status="queued"))
+
+    campaign.status = "sent" if users else "ready"
+    campaign.sent_count = len(users)
+    campaign.last_sent_at = now()
+    db.session.commit()
+    return jsonify({"status": campaign.status, "queued_notifications": len(users), "campaign": campaign_to_dict(campaign)})
 
 
 @api.get("/bots")
@@ -455,6 +705,10 @@ def telegram_schema():
             "posts": ["id", "bot_id", "title", "content", "image", "created_at"],
             "notifications": ["id", "user_id", "post_id", "sent_at", "status"],
             "analytics": ["id", "bot_id", "views", "clicks", "joins", "deposits", "created_at"],
+            "flows": ["id", "bot_id", "name", "status", "created_at", "updated_at"],
+            "nodes": ["id", "flow_id", "type", "label", "payload"],
+            "edges": ["id", "flow_id", "source_node_id", "target_node_id", "condition"],
+            "campaigns": ["id", "bot_id", "flow_id", "name", "audience", "mode", "status", "title", "message", "buttons", "filters", "scheduled_at", "sent_count", "clicked_count", "completed_count"],
         }
     )
 
@@ -471,8 +725,8 @@ def telegram_overview():
     return jsonify(
         {
             "connected_bots": Bot.query.filter_by(tenant_id=tid).count(),
-            "active_campaigns": 0,
-            "queued_notifications": 0,
+            "active_campaigns": Campaign.query.filter(Campaign.tenant_id == tid, Campaign.status.in_(["draft", "scheduled", "running"])).count(),
+            "queued_notifications": Notification.query.filter_by(tenant_id=tid, status="queued").count(),
             "views": analytics[0],
             "clicks": analytics[1],
             "joins": analytics[2],
